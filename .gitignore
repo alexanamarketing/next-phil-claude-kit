@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Node
+node_modules/
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Install backups (created by setup.sh)
+backups/
+*.tar.gz
+*.bak
+
+# Script output
+scripts/output/
+vault-skeleton/scripts/output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
+*.swo
+
+# test cache
+.pytest_cache/
+
+# tool-module runtime state (never committed)
+claude/references/tool-modules/.locks/
+claude/references/tool-modules/.glossary-ext.json
+claude/references/tool-modules/.glossary-ext.log
+claude/hooks/state/
+
+# internal build provenance, kept local, not for public release
+plans/
+docs/GAP-ANALYSIS.md

@@ -1,0 +1,364 @@
+{
+ "_meta": {
+  "schema_version": "1.0.0",
+  "catalog_version": "0.5.0",
+  "release_note": "Trimmed for the Phil realtor kit: generic AI-tell and writing-quality rules only. Personal word bans, the corpus, and the eval harness are not shipped. Advisory only.",
+  "genres": [
+   "base-voice",
+   "technical-handbooks",
+   "emails",
+   "marketing",
+   "todo-items",
+   "aeo-writing",
+   "agent-facing-instructions",
+   "session-replies-and-reports"
+  ],
+  "genre_wildcard": "*",
+  "classes": [
+   "exact",
+   "heuristic",
+   "judgment"
+  ],
+  "severities": [
+   "error",
+   "warning"
+  ],
+  "heuristics_module": "heuristics.py",
+  "suppression": {
+   "convention": "writing-lint-disable: <rule-id>",
+   "note": "An inline token 'writing-lint-disable: <rule-id>' anywhere on or (for line-scoped surfaces) adjacent to the flagged line silences that one rule id for that finding. Bare 'writing-lint-disable: all' silences every rule for the file. The token is recognised in a comment, an HTML comment (<!-- writing-lint-disable: em-dash -->), or a frontmatter 'writing-lint-disable:' list. Phase 2 implements the parser; this convention is fixed here so rule authors can rely on it."
+  }
+ },
+ "rules": [
+  {
+   "id": "ai-vocab-prohibited",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "error",
+   "message": "Hard-banned AI-tell word. the reader's CLAUDE.md bans these outright. Cut it or say the plain equivalent (this rule's word set is the swap list).",
+   "words": [
+    "delve",
+    "elevate",
+    "leverage",
+    "realm",
+    "robust",
+    "seamless",
+    "tapestry",
+    "transformative",
+    "unlock",
+    "streamline",
+    "fluff",
+    "dive into",
+    "dive in"
+   ],
+   "match_inflections": true
+  },
+  {
+   "id": "ai-vocab-density",
+   "genres": [
+    "*"
+   ],
+   "class": "judgment",
+   "severity": "warning",
+   "message": "Cluster of canonical LLM-diction words. One is fine; three or more in a passage reads as generated. Rewrite in plain words.",
+   "heuristic_fn": "llm_vocab_density"
+  },
+  {
+   "id": "em-dash",
+   "genres": [
+    "base-voice",
+    "technical-handbooks",
+    "emails",
+    "marketing",
+    "todo-items",
+    "aeo-writing",
+    "agent-facing-instructions"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Em dash character. It reads as an AI tell. Use a comma, period, or parentheses instead.",
+   "patterns": [
+    "—"
+   ]
+  },
+  {
+   "id": "curly-quotes",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Curly or smart quote. Use a straight quote instead. Matches your terminal and markdown workflow.",
+   "patterns": [
+    "‘",
+    "’",
+    "“",
+    "”"
+   ]
+  },
+  {
+   "id": "response-wrapper",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Chat-assistant wrapper or opener leaking into the prose. Lead with the outcome, not a greeting or a filler preamble.",
+   "patterns": [
+    "(?i)\\bhere's (your|the)\\b",
+    "(?i)\\bcertainly[,!]",
+    "(?i)\\bi've compiled\\b",
+    "(?i)\\bi hope this helps\\b",
+    "(?i)\\bgreat question\\b",
+    "(?i)\\blet me know if you\\b",
+    "(?i)\\bfeel free to\\b",
+    "(?i)\\bi'd be happy to\\b"
+   ]
+  },
+  {
+   "id": "boilerplate-closers",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Boilerplate closer or recap tag. Delete it: if the paragraph lands its point without the summarizing tag, the closer was padding.",
+   "patterns": [
+    "(?i)\\bin conclusion\\b",
+    "(?i)\\bin summary\\b",
+    "(?i)^overall,",
+    "(?i)\\bin today's fast-paced world\\b",
+    "(?i)\\bthe key takeaway is\\b",
+    "(?i)\\bat the end of the day\\b",
+    "(?i)\\ball in all\\b"
+   ]
+  },
+  {
+   "id": "negation-reframe",
+   "genres": [
+    "*"
+   ],
+   "class": "judgment",
+   "severity": "warning",
+   "message": "The negation-then-restatement antithesis (reject one thing, then dramatically restate it). Strongest cross-source AI tell. State what the thing is directly. A precise informative contrast stays clean.",
+   "heuristic_fn": "negation_reframe"
+  },
+  {
+   "id": "hollow-significance",
+   "genres": [
+    "*"
+   ],
+   "class": "heuristic",
+   "severity": "warning",
+   "message": "Asserts importance without naming a concrete result. A phrase that claims something matters, with no effect or number, says nothing. Name the actual effect."
+  },
+  {
+   "id": "weasel-quantifier",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Vague quantifier or intensifier where a real number exists. Replace it with the number, or cut the intensifier.",
+   "words": [
+    "a number of",
+    "clearly",
+    "completely",
+    "exceedingly",
+    "extremely",
+    "fairly",
+    "huge",
+    "largely",
+    "many",
+    "mostly",
+    "obviously",
+    "quite",
+    "relatively",
+    "remarkably",
+    "several",
+    "significantly",
+    "substantially",
+    "surprisingly",
+    "various",
+    "vast",
+    "very"
+   ]
+  },
+  {
+   "id": "weasel-attribution",
+   "genres": [
+    "*"
+   ],
+   "class": "judgment",
+   "severity": "warning",
+   "message": "Vague appeal to unnamed authority. Name the specific source, or state the measured fact. (An explicit citation in the same sentence keeps it quiet.)",
+   "heuristic_fn": "weasel_attribution"
+  },
+  {
+   "id": "hidden-actor-passive",
+   "genres": [
+    "*"
+   ],
+   "class": "judgment",
+   "severity": "warning",
+   "message": "Passive voice that hides who acts on a promised future action. Name the actor: 'the support team will review your request'. A trailing 'by <actor>' exempts it.",
+   "heuristic_fn": "hidden_actor_passive"
+  },
+  {
+   "id": "wordiness",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Padded circumlocution. Prefer the short plain equivalent (this rule's word set is the swap list).",
+   "words": [
+    "due to the fact that",
+    "at this point in time",
+    "at the present time",
+    "in order to",
+    "for all intents and purposes",
+    "owing to the fact that",
+    "in the event that",
+    "with regard to",
+    "it is important to note that"
+   ]
+  },
+  {
+   "id": "hedge-stacking",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Stacked hedge: the modal already carries the uncertainty, the second hedge is redundant. Keep one ('could affect' or 'possibly affects', not both).",
+   "patterns": [
+    "(?i)\\b(?:could|might|may)\\s+(?:potentially|possibly|perhaps|arguably|conceivably)\\b",
+    "(?i)\\b(?:potentially|possibly|perhaps|arguably|conceivably)\\s+(?:potentially|possibly|perhaps|arguably|conceivably)\\b"
+   ]
+  },
+  {
+   "id": "placeholder-leakage",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Draft scaffolding left in the prose (placeholder, lorem ipsum, or TBD). Resolve it before this ships.",
+   "patterns": [
+    "(?i)\\blorem ipsum\\b",
+    "(?i)\\[(?:insert|placeholder|your|add)\\b[^\\]\\n]{0,60}\\]",
+    "\\bTBD\\b"
+   ]
+  },
+  {
+   "id": "template-field-leakage",
+   "genres": [
+    "base-voice",
+    "technical-handbooks",
+    "todo-items",
+    "aeo-writing",
+    "agent-facing-instructions",
+    "session-replies-and-reports"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Unfilled template merge field in prose that never passes through a merge step, so the reader sees the raw braces. Write the real value.",
+   "patterns": [
+    "\\{\\{[^}\\n]+\\}\\}"
+   ]
+  },
+  {
+   "id": "doubled-word",
+   "genres": [
+    "*"
+   ],
+   "class": "judgment",
+   "severity": "warning",
+   "message": "Accidentally repeated word (the repeat often hides across a line break). Delete one.",
+   "heuristic_fn": "doubled_word"
+  },
+  {
+   "id": "simplicity-swaps",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Long word with a plain synonym. Prefer the short common word.",
+   "words": [
+    "utilize",
+    "utilise",
+    "facilitate",
+    "numerous",
+    "commence"
+   ]
+  },
+  {
+   "id": "uncomparables",
+   "genres": [
+    "*"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Absolute adjective paired with a comparator or intensifier. It is non-gradable; drop the modifier.",
+   "patterns": [
+    "(?i)\\b(very|more|most|less|least|increasingly|quite|extremely|somewhat|rather)\\s+(unique|complete|perfect|accurate|precise|exact|correct|entire|inevitable|impossible|false|fatal|final|universal|infinite|ideal|total)\\b"
+   ]
+  },
+  {
+   "id": "exclamation-marks",
+   "genres": [
+    "marketing"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Exclamation mark. the reader's copywriting rules ban it; the claim should carry the energy, not the punctuation.",
+   "patterns": [
+    "!"
+   ]
+  },
+  {
+   "id": "credibility-padding",
+   "genres": [
+    "marketing"
+   ],
+   "class": "exact",
+   "severity": "warning",
+   "message": "Credibility padding or humble-brag lead-in. Lead with the concrete result instead.",
+   "patterns": [
+    "(?i)\\bas someone who has\\b",
+    "(?i)\\bhaving worked with\\b",
+    "(?i)\\bin my years of experience\\b",
+    "(?i)\\bas a seasoned\\b"
+   ]
+  },
+  {
+   "id": "heading-case-title",
+   "genres": [
+    "agent-facing-instructions"
+   ],
+   "class": "judgment",
+   "severity": "warning",
+   "message": "Agent-facing heading should use title or short case. Per-genre rule: agent-facing takes title case, doc genres take sentence case.",
+   "heuristic_fn": "heading_title_case"
+  },
+  {
+   "id": "heading-case-sentence",
+   "genres": [
+    "technical-handbooks",
+    "emails",
+    "marketing",
+    "aeo-writing",
+    "todo-items",
+    "session-replies-and-reports"
+   ],
+   "class": "judgment",
+   "severity": "warning",
+   "message": "Doc-genre heading should use sentence case rather than title case. Per-genre rule: doc genres sentence case, agent-facing title case.",
+   "heuristic_fn": "heading_sentence_case"
+  }
+ ]
+}

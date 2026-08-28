@@ -1,0 +1,85 @@
+# config.yaml — Claude Code Vault Configuration
+#
+# Copied to <vault-root>/config.yaml by setup.sh.
+# After install, edit this file to match your setup.
+# The hooks, skills, and scripts all read from here.
+#
+# Fields marked (auto) are filled in by setup.sh — review and adjust if needed.
+
+# -------------------------------------------------------------------
+# Vault root (auto)
+# Absolute path to your vault. This is the folder that contains the
+# active/, inactive/, potential/, completed/, and lost/ project buckets.
+# -------------------------------------------------------------------
+vault_root: ~/vault
+
+# -------------------------------------------------------------------
+# Shortcuts
+# Map short names to project paths so you can type /project <shortcut>
+# to jump directly to a project without browsing the list.
+#
+# Format:  shortcut: "bucket/project-slug"
+# "home" is reserved: /project home loads vault-root context (no project).
+# The loader always falls back to listing active/ when a shortcut is unknown,
+# so you can also just browse and type the number.
+# -------------------------------------------------------------------
+shortcuts:
+  home: ""                          # reserved — loads vault README, no project
+  # example: "active/your-project-slug"   # add shortcuts here after creating projects
+
+# -------------------------------------------------------------------
+# OS commands (auto)
+# setup.sh detects Linux vs macOS and fills these in automatically.
+# Adjust if you use Wayland (wl-copy instead of xclip) or install
+# the macOS trash utility via Homebrew.
+# -------------------------------------------------------------------
+os_open: xdg-open                       # macOS: open
+os_copy: xclip -selection clipboard     # macOS: pbcopy | Wayland: wl-copy
+os_trash: gio trash                     # macOS: trash  (brew install trash)
+
+# -------------------------------------------------------------------
+# Hook strictness
+# Controls how index-enforcer behaves when you create a new .md file
+# in a directory that has an INDEX.md:
+#
+#   normal  — BLOCKS the write with instructions (recommended)
+#   relaxed — warns in stderr but allows the write (good while onboarding)
+# -------------------------------------------------------------------
+hook_strictness: relaxed
+
+# -------------------------------------------------------------------
+# Help mode
+# When on, short teaching prompts appear at key moments so new users
+# learn by doing. Turn off with /help off once the workflow is
+# familiar. Default: on.
+# -------------------------------------------------------------------
+help_mode: on
+
+# -------------------------------------------------------------------
+# Sacred files
+# Filenames that bypass index enforcement. Hooks never block writes to
+# these names, regardless of which directory they live in.
+# Add project-specific always-allowed names here if needed.
+# -------------------------------------------------------------------
+sacred_files:
+  - INDEX.md
+  - CLAUDE.md
+  - HANDOFF.md
+  - notes.md
+  - todo.md
+  - README.md
+  - ABOUT.md
+
+# -------------------------------------------------------------------
+# Skip directories
+# Directory names that hooks skip entirely when scanning the vault.
+# Files inside these directories are never checked by index-enforcer
+# or rebuild_indexes.
+# -------------------------------------------------------------------
+skip_dirs:
+  - _inbox
+  - .firecrawl
+  - .git
+  - node_modules
+  - __pycache__
+  - .cache

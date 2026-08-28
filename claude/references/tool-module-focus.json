@@ -1,0 +1,5 @@
+{
+  "_doc": "Per-project tool FOCUS. If you keep your work for one project in its own folder, you can list that folder here so Claude loads that project's key tools in full detail while you are working in it. Optional: with no entries, Claude still injects every tool's always-on danger notes and a short title list for the rest, which is the safe default. Each project has a name, a list of folder roots, and a list of focus tags (e.g. \"flexmls/*\" for everything about FlexMLS).",
+  "version": 1,
+  "projects": []
+}

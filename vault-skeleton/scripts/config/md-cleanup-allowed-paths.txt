@@ -1,0 +1,10 @@
+# md-cleanup allowed paths config
+# Read by: markdown-location.py hook, /organize skill
+# Format: KEY=space-separated values
+# Non-TIER2 subfolders are auto-allowed if the directory exists on disk.
+
+SACRED_FILES=CLAUDE.md HANDOFF.md README.md notes.md todo.md requirements.md
+INDEX_FILE=INDEX.md
+TIER1_FOLDERS=docs working-files archived deliverables business-files case-study website linkedin-personal computer finances
+TIER2_FOLDERS=drafts research audits reports plans references skill-journals _inbox sessions content
+SUBPROJECT_MARKER=CLAUDE.md

@@ -1,0 +1,15 @@
+# md-cleanup folder exclusions
+# Matching is prefix-based: any folder whose name starts with a listed entry is excluded
+# Applies to: hook, skill, rebuild_indexes.py script
+
+.firecrawl
+.wrangler
+.git
+.obsidian
+node_modules
+dist
+build
+.next
+.astro
+media
+website-crawl

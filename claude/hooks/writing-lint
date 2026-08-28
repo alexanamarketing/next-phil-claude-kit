@@ -1,0 +1,959 @@
+#!/usr/bin/env python3
+"""writing-lint: deterministic writing-standards linter (Phase 2).
+
+Single authoritative rule source is the hybrid catalog built in Phase 1:
+  ~/.claude/references/writing-standards/rules/rules.json   (23 rules)
+  ~/.claude/references/writing-standards/rules/heuristics.py (5 judgment fns)
+
+Stdlib only. No network, no LLM, no third-party deps. This CLI reads content
+(from a file path argument or stdin), resolves a genre, runs every rule whose
+genre scope matches, honours inline suppression waivers, and emits findings as
+JSON (or human-readable). Exit codes are stable so Phase 5 hooks can branch on
+them.
+
+=============================================================================
+GENRE RESOLUTION (precedence, highest first)
+=============================================================================
+  1. --genre <name> on the command line (explicit wins).
+  2. A `writing-genre: <name>` override in the content: either a YAML
+     frontmatter key (inside a leading `---` block) or the first non-blank
+     line written as `writing-genre: <name>` (optionally in a comment).
+     This override beats the path convention.
+  3. Path convention on the file path argument (see PATH_GENRE_MAP below):
+        .../emails/... or a *.eml file      -> emails
+        .../marketing/ | /copy/ | /ads/      -> marketing
+        .../aeo/ | /answer-engine/           -> aeo-writing
+        .../handbooks/ | /technical-docs/    -> technical-handbooks
+        .../todos/                           -> todo-items
+        .../agents/ | /skills/ | AGENTS.md   -> agent-facing-instructions
+        anything under a .claude/ tree       -> agent-facing-instructions
+        .../reports/ | /replies/             -> session-replies-and-reports
+  4. --surface hint (only when nothing above resolved, e.g. stdin with no
+     path): email->emails, stop-reply/stop-file->session-replies-and-reports.
+  5. base-voice (the floor). Anything in scope with no genre lands here; only
+     the `["*"]` base-voice rules run.
+
+EXCLUSION: internal working docs are never linted. If the file path's basename
+is one of todo.md, completed-todo.md, notes.md, HANDOFF.md, CLAUDE.md
+(case-insensitive), the CLI emits nothing and exits 0. Exclusion is decided on
+the file path only; stdin content is never auto-excluded.
+
+=============================================================================
+RULE APPLICATION
+=============================================================================
+A rule fires when the resolved genre is listed in the rule's `genres`, or the
+rule's genres is the wildcard ["*"] (the base-voice layer, always on). Three
+tiers, matching the catalog `class`:
+  exact     -> `words` (whole-word, case-insensitive) and/or `patterns` (regex)
+  heuristic -> `template` slot-fill expanded to a regex using `slots`
+  judgment  -> the callable in heuristics.HEURISTICS[heuristic_fn]
+
+=============================================================================
+SUPPRESSION (waivers)  -- convention fixed in rules.json _meta.suppression
+=============================================================================
+Token: `writing-lint-disable: <rule-id>[, <rule-id> ...][ -- reason]`
+  - `writing-lint-disable: all`  silences every rule for the whole file.
+  - A token on its own line (only a comment/directive, no other prose), or
+    inside frontmatter, is FILE-SCOPED for the listed rule ids.
+  - A token trailing a content line is LINE-SCOPED: it silences only findings
+    on that same line for the listed rule ids.
+  - An optional reason after `--` (or `reason:` / `#`) is recorded on each
+    finding it silences. Suppressed findings are dropped from the reported
+    findings list and never affect the exit code.
+
+=============================================================================
+EXIT CODES  (stable; Phase 5 hooks branch on these)
+=============================================================================
+  0  clean (no findings, or every finding was suppressed)
+  1  at least one reported finding of severity `error`
+  2  reported findings but all are severity `warning`
+  3  usage error or internal failure (bad args, unreadable file, bad catalog)
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+
+DEFAULT_RULES_DIR = os.path.expanduser(
+    "~/.claude/references/writing-standards/rules"
+)
+
+# Internal working docs that are never linted (basename, case-insensitive).
+EXCLUDED_BASENAMES = {
+    "todo.md",
+    "completed-todo.md",
+    "notes.md",
+    "handoff.md",
+    "claude.md",
+}
+
+# Internal trees never linted (path substring, lowercased POSIX path). Covers the
+# registry's own rule-docs (they enumerate the banned words, so they self-flag),
+# Claude Code's own transcript/tool-result files, and internal working docs
+# (plans, journals, the .scratch tracker) that are high-churn and not deliverables.
+EXCLUDED_PATH_NEEDLES = (
+    "/.claude/references/writing-standards/",
+    "/.claude/projects/",
+    "/tool-results/",
+    "/working-files/plans/",
+    "/.scratch/",
+)
+
+# Path-convention genre map. Each entry: (needle, genre). First hit wins; the
+# needle is matched against the lowercased POSIX-style path. Kept deliberately
+# small and explicit so resolution stays predictable and documented.
+PATH_GENRE_MAP = [
+    ("/emails/", "emails"),
+    ("/marketing/", "marketing"),
+    ("/copy/", "marketing"),
+    ("/ads/", "marketing"),
+    ("/aeo/", "aeo-writing"),
+    ("/answer-engine/", "aeo-writing"),
+    ("/handbooks/", "technical-handbooks"),
+    ("/technical-docs/", "technical-handbooks"),
+    ("/todos/", "todo-items"),
+    ("/agents/", "agent-facing-instructions"),
+    ("/skills/", "agent-facing-instructions"),
+    ("/reports/", "session-replies-and-reports"),
+    ("/replies/", "session-replies-and-reports"),
+]
+
+# --surface -> genre hint, used only when nothing else resolved.
+SURFACE_GENRE_HINT = {
+    "email": "emails",
+    "stop-reply": "session-replies-and-reports",
+    "stop-file": "session-replies-and-reports",
+}
+
+VALID_SURFACES = {"write", "edit", "stop-file", "stop-reply", "email"}
+
+BASE_VOICE = "base-voice"
+
+# Suppression token. Body runs to end of line.
+_DISABLE_RE = re.compile(r"writing-lint-disable:\s*(?P<body>[^\n\r]*)")
+_RULE_ID_TOKEN_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+# Comment wrappers we strip when deciding whether a directive is alone on a line.
+_COMMENT_STRIP_RE = re.compile(r"<!--|-->|/\*|\*/|//|#|;|^\s*-\s*|^\s*\*\s*")
+
+
+class LintError(Exception):
+    """Usage / internal error -> exit code 3."""
+
+
+class _ArgParser(argparse.ArgumentParser):
+    """argparse exits 2 on a bad flag, but 2 is our 'warnings-only' code and 3 is
+    'usage error'. Raise instead so main() maps it to exit 3 (BUG-002)."""
+
+    def error(self, message):
+        raise LintError("usage error: {}".format(message))
+
+
+# --------------------------------------------------------------------------
+# catalog + heuristics loading
+# --------------------------------------------------------------------------
+
+def load_catalog(rules_dir):
+    catalog_path = os.path.join(rules_dir, "rules.json")
+    if not os.path.exists(catalog_path):
+        raise LintError("catalog not found at {}".format(catalog_path))
+    try:
+        with open(catalog_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LintError("cannot read catalog: {}".format(exc))
+
+
+def load_heuristics(rules_dir):
+    """Import heuristics.py from the rules dir by path; return HEURISTICS."""
+    import importlib.util
+
+    hpath = os.path.join(rules_dir, "heuristics.py")
+    if not os.path.exists(hpath):
+        raise LintError("heuristics module not found at {}".format(hpath))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "writing_lint_heuristics", hpath
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.HEURISTICS
+    except Exception as exc:  # noqa: BLE001
+        raise LintError("cannot load heuristics: {}".format(exc))
+
+
+# --------------------------------------------------------------------------
+# genre resolution + exclusion
+# --------------------------------------------------------------------------
+
+def is_excluded(path):
+    if not path:
+        return False
+    if os.path.basename(path).lower() in EXCLUDED_BASENAMES:
+        return True
+    p = path.replace(os.sep, "/").lower()
+    return any(n in p for n in EXCLUDED_PATH_NEEDLES)
+
+
+_FRONTMATTER_GENRE_RE = re.compile(
+    r"writing-genre:\s*([A-Za-z][A-Za-z0-9-]*)"
+)
+
+
+def _override_genre(text):
+    """Find a `writing-genre: <name>` override in a frontmatter block or the
+    first non-blank line. Returns the genre string or None."""
+    if not text:
+        return None
+    lines = text.splitlines()
+    # frontmatter block: leading '---' ... '---'
+    if lines and lines[0].strip() == "---":
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            m = _FRONTMATTER_GENRE_RE.search(line)
+            if m:
+                return m.group(1)
+    # first non-blank line override (allows a leading comment marker)
+    for line in lines[:5]:
+        if not line.strip():
+            continue
+        m = _FRONTMATTER_GENRE_RE.search(line)
+        if m:
+            return m.group(1)
+        break
+    return None
+
+
+def resolve_genre(path, explicit, surface, text, valid_genres):
+    """Resolve the genre by the documented precedence. Returns a genre name;
+    an unknown explicit/override genre falls through rather than crashing."""
+    if explicit and explicit in valid_genres:
+        return explicit
+    override = _override_genre(text)
+    if override and override in valid_genres:
+        return override
+    if path:
+        p = path.replace(os.sep, "/").lower()
+        base = os.path.basename(p)
+        if base == "agents.md":
+            return "agent-facing-instructions"
+        if "/.claude/" in p or p.startswith(".claude/"):
+            return "agent-facing-instructions"
+        for needle, genre in PATH_GENRE_MAP:
+            if needle in p:
+                return genre
+        if p.endswith(".eml"):
+            return "emails"
+    if surface and surface in SURFACE_GENRE_HINT:
+        return SURFACE_GENRE_HINT[surface]
+    return BASE_VOICE
+
+
+# --------------------------------------------------------------------------
+# line-offset helper
+# --------------------------------------------------------------------------
+
+def _line_starts(text):
+    starts = [0]
+    for m in re.finditer(r"\n", text):
+        starts.append(m.end())
+    return starts
+
+
+def _line_of(starts, index):
+    # binary search for the greatest line-start <= index
+    lo, hi = 0, len(starts) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if starts[mid] <= index:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo + 1  # 1-based
+
+
+# --------------------------------------------------------------------------
+# context masking (shared pre-pass)
+# --------------------------------------------------------------------------
+# Every rule in the catalog describes PROSE. When one fires inside a fenced code
+# block, an inline code span, a URL, a markdown link destination, YAML
+# frontmatter, a block quote, template merge syntax, or a bracketed placeholder,
+# it is almost always wrong: that text is machinery or someone else's words, not
+# something the author wrote as prose. So the engine blanks those regions ONCE per
+# document and every rule scans the blanked copy by default. A rule that
+# genuinely needs to see one of those regions (the markdown-link rule has to see
+# links; the template-field rule has to see {{...}}) names that class in its
+# catalog `unmask` list and gets a scan string with that class left intact.
+#
+# Accepted miss, recorded so it is not rediscovered as a bug: an author-voice
+# callout the author writes as a markdown block quote (a `>` line) is masked with
+# everyone else's quoted words and is therefore never linted.
+#
+# Masked characters become spaces, never nothing, and newlines are kept as-is.
+# Line numbers are load-bearing downstream: the PostToolUse report, the email
+# hook, and the Stop hook's block-once hash all key on surface:rule:line, so a
+# mask that collapsed or shifted lines would silently re-arm a block the author had
+# already cleared.
+
+MASK_CLASSES = (
+    "frontmatter",
+    "fenced-code",
+    "inline-code",
+    "urls",
+    "link-destinations",
+    "block-quotes",
+    "template-syntax",
+    "square-bracket-placeholders",
+)
+
+# Classes that also hide a suppression token from the parser (MAJOR-4). A doc
+# that DOCUMENTS the waiver token (`writing-lint-disable: all` shown in
+# backticks or a fenced example) must not thereby disarm itself.
+SUPPRESSION_BLIND_CLASSES = ("fenced-code", "inline-code")
+
+_FENCE_LINE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_URL_RE = re.compile(r"https?://[^\s<>\"'`\])]+")
+# Only the chars BETWEEN the parens are masked (group 1); both parens and the
+# [label] stay visible so markdown-link-syntax can still see the whole shape.
+_LINK_DEST_RE = re.compile(r"\[[^\]\n]*\]\(([^)\n]*)\)")
+_BLOCK_QUOTE_RE = re.compile(r"^[ \t]{0,3}>[^\n]*", re.MULTILINE)
+_TEMPLATE_SYNTAX_RE = re.compile(r"\{\{[^}\n]+\}\}")
+# Deliberately identical to placeholder-leakage's bracket pattern in rules.json:
+# the mask class and the rule have to agree on what a placeholder IS, or the
+# rule unmasks a span that does not cover its own match.
+_BRACKET_PLACEHOLDER_RE = re.compile(
+    r"(?i)\[(?:insert|placeholder|your|add)\b[^\]\n]{0,60}\]"
+)
+
+
+def _blank(matched):
+    """The mask primitive: every character becomes a space EXCEPT newlines,
+    which pass through untouched so line numbering is unchanged."""
+    return "".join(c if c == "\n" else " " for c in matched)
+
+
+def _lines_with_offsets(text):
+    """[(line_including_newline, char_offset_of_line_start), ...]."""
+    out = []
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        out.append((line, pos))
+        pos += len(line)
+    return out
+
+
+def _frontmatter_spans(lines):
+    """The leading `---` ... `---` block, if the document opens with one."""
+    if not lines or lines[0][0].strip() != "---":
+        return []
+    for line, off in lines[1:]:
+        if line.strip() == "---":
+            return [(0, off + len(line.rstrip("\r\n")))]
+    return []
+
+
+def _fenced_spans(lines, text_len):
+    """Fenced code blocks, fence markers included. An unclosed fence masks to
+    the end of the document: a half-written block is still code, and treating
+    its tail as prose is exactly the noise this pass exists to kill.
+
+    CommonMark closing rule: a fence closes only on the same character AND at
+    least as many of them as the opening fence. Without the length check a
+    four-backtick block that DEMONSTRATES a three-backtick fence would close on
+    the inner line, and the rest of the real code block would be linted as prose.
+    """
+    spans = []
+    start = None
+    marker = None
+    marker_len = 0
+    for line, off in lines:
+        stripped = line.rstrip("\r\n")
+        m = _FENCE_LINE_RE.match(stripped)
+        if start is None:
+            if m:
+                start = off
+                marker = m.group(1)[0]
+                marker_len = len(m.group(1))
+        elif m and m.group(1)[0] == marker and len(m.group(1)) >= marker_len:
+            spans.append((start, off + len(stripped)))
+            start = None
+            marker = None
+            marker_len = 0
+    if start is not None:
+        spans.append((start, text_len))
+    return spans
+
+
+def mask_spans(text):
+    """Return {class_name: [(start, end), ...]} over the RAW text.
+
+    Frontmatter and fenced blocks are found first; the other classes skip any
+    match that starts inside one of them, so the classes stay non-nested and a
+    per-rule unmask of (say) inline-code cannot punch a hole in a fenced block.
+    """
+    lines = _lines_with_offsets(text)
+    spans = {cls: [] for cls in MASK_CLASSES}
+    spans["frontmatter"] = _frontmatter_spans(lines)
+    spans["fenced-code"] = _fenced_spans(lines, len(text))
+    outer = spans["frontmatter"] + spans["fenced-code"]
+
+    def _outside(i):
+        return not any(s <= i < e for s, e in outer)
+
+    for cls, rx in (
+        ("inline-code", _INLINE_CODE_RE),
+        ("urls", _URL_RE),
+        ("block-quotes", _BLOCK_QUOTE_RE),
+        ("template-syntax", _TEMPLATE_SYNTAX_RE),
+        ("square-bracket-placeholders", _BRACKET_PLACEHOLDER_RE),
+    ):
+        spans[cls] = [(m.start(), m.end()) for m in rx.finditer(text)
+                      if _outside(m.start())]
+    spans["link-destinations"] = [
+        (m.start(1), m.end(1)) for m in _LINK_DEST_RE.finditer(text)
+        if _outside(m.start())
+    ]
+    return spans
+
+
+def apply_masks(text, spans, classes):
+    """Blank the spans of the named classes. Overlap-safe (spans are merged in
+    offset order), and the returned string is the same length as `text`."""
+    wanted = []
+    for cls in classes:
+        wanted.extend(spans.get(cls, ()))
+    if not wanted:
+        return text
+    wanted.sort()
+    out = []
+    cursor = 0
+    for start, end in wanted:
+        if end <= cursor:
+            continue
+        start = max(start, cursor)
+        out.append(text[cursor:start])
+        out.append(_blank(text[start:end]))
+        cursor = end
+    out.append(text[cursor:])
+    return "".join(out)
+
+
+def mask(text, unmask=()):
+    """Convenience: fully masked text, minus any classes named in `unmask`."""
+    keep = set(unmask)
+    return apply_masks(text, mask_spans(text),
+                       [c for c in MASK_CLASSES if c not in keep])
+
+
+def _in_any_span(index, spans):
+    return any(s <= index < e for s, e in spans)
+
+
+# --------------------------------------------------------------------------
+# rule matchers (three tiers)
+# --------------------------------------------------------------------------
+
+def _inflect_single(w):
+    """Common English inflections of a single lowercase word. Deliberately
+    over-generates (non-words are harmless: they never appear in real prose);
+    the real forms (-s/-es/-ies, -d/-ed/-ied, -ing, -ly) are what we want to
+    catch so a banned base word does not slip past as 'leveraged'/'streamlined'."""
+    forms = {w}
+    if re.search(r"(s|x|z|ch|sh)$", w):
+        forms.add(w + "es")
+    elif re.search(r"[^aeiou]y$", w):
+        forms.add(w[:-1] + "ies")
+    else:
+        forms.add(w + "s")
+    if w.endswith("e"):
+        forms.add(w + "d")
+    elif re.search(r"[^aeiou]y$", w):
+        forms.add(w[:-1] + "ied")
+    else:
+        forms.add(w + "ed")
+    if w.endswith("e") and not w.endswith("ee"):
+        forms.add(w[:-1] + "ing")
+    else:
+        forms.add(w + "ing")
+    forms.add(w + "ly")
+    return forms
+
+
+def _inflect_word(w):
+    """Inflect a banned entry. For a multi-word phrase ('dive into') only the
+    leading verb is inflected and the tail is kept, so 'diving into' fires but a
+    bare 'diving' (scuba) does not."""
+    if " " in w:
+        head, rest = w.split(" ", 1)
+        return {"{} {}".format(h, rest) for h in _inflect_single(head)}
+    return _inflect_single(w)
+
+
+def _match_words(words, text, inflect=False):
+    out = []
+    seen = set()
+    for w in words:
+        forms = _inflect_word(w) if inflect else {w}
+        for form in forms:
+            if form in seen:
+                continue
+            seen.add(form)
+            rx = re.compile(r"\b" + re.escape(form) + r"\b", re.IGNORECASE)
+            for m in rx.finditer(text):
+                out.append((m.group(0), m.start()))
+    return out
+
+
+def _match_patterns(patterns, text, rid):
+    out = []
+    for pat in patterns:
+        try:
+            rx = re.compile(pat)
+        except re.error as exc:
+            raise LintError(
+                "rule '{}' has an invalid regex {!r}: {}".format(rid, pat, exc)
+            )
+        for m in rx.finditer(text):
+            out.append((m.group(0), m.start()))
+    return out
+
+
+def _compile_template(tmpl, slots):
+    tokens = []
+    for w in tmpl.split():
+        m = re.fullmatch(r"\{([a-z_]+)\}", w)
+        if m:
+            alts = slots.get(m.group(1), [])
+            tokens.append("(?:" + "|".join(re.escape(a) for a in alts) + ")")
+        else:
+            tokens.append(re.escape(w))
+    pat = r"\b" + r"\s+".join(tokens) + r"\b"
+    return re.compile(pat, re.IGNORECASE)
+
+
+def _match_template(templates, slots, text):
+    out = []
+    for tmpl in templates:
+        rx = _compile_template(tmpl, slots)
+        for m in rx.finditer(text):
+            out.append((m.group(0), m.start()))
+    return out
+
+
+SPLICE_RECHECK_CLASSES = ("exact", "heuristic")
+
+
+def _survives_raw_recheck(rule, raw_match, heuristics):
+    """True if the rule still matches the raw text its masked hit covered.
+
+    Masking blanks a code span, a URL or a fenced block to spaces of the same
+    length, which can splice two distant words into one apparent phrase: "could
+    `--dry-run` potentially" reads as "could            potentially" on the
+    masked copy, and a multi-token rule like hedge-stacking matches text that
+    does not exist in what the author wrote. Re-running the rule's own matcher over
+    the raw slice kills exactly that class of hit and nothing else: a hit whose
+    raw and masked text are identical never reaches here, and a real match
+    re-matches its own text.
+
+    Only exact and heuristic rules are re-checked. A judgment detector carries
+    its own context logic (sentence bounds, citation evidence, a document-level
+    threshold) and would not survive being handed a bare fragment of itself.
+    """
+    for hit_text, hit_index in apply_rule(rule, raw_match, heuristics):
+        if hit_index == 0 and len(hit_text) == len(raw_match):
+            return True
+    return False
+
+
+def apply_rule(rule, scan, heuristics):
+    """Return raw (match, index) hits for a rule against `scan`.
+
+    `scan` is the masked copy built for THIS rule (see mask_spans / apply_masks),
+    never the raw document. Offsets still index the raw document, because masking
+    is length-preserving. Judgment detectors get the same per-rule scan text, so
+    weasel-attribution's URL-based citation suppressor works once its rule
+    unmasks the url class.
+    """
+    cls = rule.get("class")
+    rid = rule.get("id", "<unknown>")
+    if cls == "exact":
+        hits = []
+        if rule.get("words"):
+            hits += _match_words(rule["words"], scan,
+                                 inflect=rule.get("match_inflections", False))
+        if rule.get("patterns"):
+            hits += _match_patterns(rule["patterns"], scan, rid)
+        return hits
+    if cls == "heuristic":
+        return _match_template(rule.get("template", []), rule.get("slots", {}),
+                               scan)
+    if cls == "judgment":
+        fn_id = rule.get("heuristic_fn")
+        fn = heuristics.get(fn_id)
+        if fn is None:
+            raise LintError(
+                "rule '{}' names unknown heuristic_fn '{}'".format(rid, fn_id)
+            )
+        results = fn(scan)
+        return [(r.get("match", ""), r.get("index", 0)) for r in results]
+    raise LintError("rule '{}' has unknown class '{}'".format(rid, cls))
+
+
+# --------------------------------------------------------------------------
+# suppression parsing
+# --------------------------------------------------------------------------
+
+def parse_suppressions(text, known_ids, line_starts, blind_spans=()):
+    """Parse writing-lint-disable tokens from the RAW text.
+
+    Returns (file_disabled, line_disabled) where:
+      file_disabled : dict rule_id -> reason(str|None); may contain 'all'
+      line_disabled : dict line_no -> dict rule_id -> reason(str|None)
+
+    `blind_spans` are the code-span and fenced-block offsets (MAJOR-4). A token
+    starting inside one of them is a token being SHOWN, not used: the file that
+    documents `writing-lint-disable: all` in backticks would otherwise silence
+    itself, and every doc that copies that documentation would inherit the hole.
+    """
+    file_disabled = {}
+    line_disabled = {}
+    for m in _DISABLE_RE.finditer(text):
+        if _in_any_span(m.start(), blind_spans):
+            continue
+        body = m.group("body")
+        line_no = _line_of(line_starts, m.start())
+        # split off an optional reason after --, reason:, or #
+        parts = re.split(r"\s*(?:--|reason:|#)\s*", body, maxsplit=1,
+                         flags=re.IGNORECASE)
+        ids_part = parts[0]
+        reason = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+        ids = []
+        for tok in _RULE_ID_TOKEN_RE.findall(ids_part):
+            if tok == "all" or tok in known_ids:
+                ids.append(tok)
+        if not ids:
+            continue
+        # decide file- vs line-scope: file-scope if 'all', if inside a leading
+        # frontmatter block, or if the directive stands alone on its line.
+        full_line = _full_line(text, line_starts, line_no)
+        residue = _COMMENT_STRIP_RE.sub("", full_line)
+        residue = _DISABLE_RE.sub("", residue).strip()
+        alone = residue == ""
+        in_frontmatter = _in_frontmatter(text, line_starts, m.start())
+        file_scope = ("all" in ids) or alone or in_frontmatter
+        if file_scope:
+            for rid in ids:
+                file_disabled.setdefault(rid, reason)
+        else:
+            bucket = line_disabled.setdefault(line_no, {})
+            for rid in ids:
+                bucket.setdefault(rid, reason)
+    return file_disabled, line_disabled
+
+
+def _full_line(text, line_starts, line_no):
+    start = line_starts[line_no - 1]
+    end = line_starts[line_no] - 1 if line_no < len(line_starts) else len(text)
+    return text[start:end]
+
+
+def _in_frontmatter(text, line_starts, index):
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    # char offset where the closing --- line begins
+    close_line = None
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            close_line = i
+            break
+    if close_line is None:
+        return False
+    close_offset = line_starts[close_line] if close_line < len(line_starts) else len(text)
+    return index < close_offset
+
+
+# --------------------------------------------------------------------------
+# core lint
+# --------------------------------------------------------------------------
+
+def lint_text(text, genre=None, surface=None, path=None, rules_dir=None,
+              catalog=None, heuristics=None):
+    """Lint `text` and return a result dict:
+        {genre, excluded, catalog_version, findings:[...]}
+    Each finding: {rule_id, severity, message, line, match, span, genre,
+                   suppressed(bool), reason(str|None)}.
+    If path is excluded, findings is [] and excluded is True.
+    """
+    rules_dir = rules_dir or DEFAULT_RULES_DIR
+    if catalog is None:
+        catalog = load_catalog(rules_dir)
+    if heuristics is None:
+        heuristics = load_heuristics(rules_dir)
+
+    meta = catalog.get("_meta", {})
+    valid_genres = set(meta.get("genres", []))
+    valid_genres.add(BASE_VOICE)
+    rules = catalog.get("rules", [])
+    known_ids = {r["id"] for r in rules}
+
+    # An explicit --genre must name a real genre. A silent fallback to base-voice
+    # would let a typo drop that genre's rules unnoticed (BUG-003).
+    if genre is not None and genre not in valid_genres:
+        raise LintError("unknown --genre {!r}; valid genres: {}".format(
+            genre, ", ".join(sorted(valid_genres))))
+
+    if is_excluded(path):
+        return {"genre": None, "excluded": True,
+                "catalog_version": meta.get("catalog_version"), "findings": []}
+
+    resolved = resolve_genre(path, genre, surface, text, valid_genres)
+    line_starts = _line_starts(text)
+
+    # Shared masking pre-pass. `text` is never rebound: genre resolution (above)
+    # and suppression parsing (below) read the RAW document, and every reported
+    # match is re-sliced from raw by offset further down.
+    span_map = mask_spans(text)
+    blind_spans = []
+    for cls in SUPPRESSION_BLIND_CLASSES:
+        blind_spans.extend(span_map[cls])
+    scan_cache = {}
+
+    def _scan_for(rule):
+        """The masked copy this rule scans: everything masked except the classes
+        it lists in `unmask`. Cached per distinct unmask set (23 of 27 rules
+        share the empty set, so this builds the full mask once)."""
+        keep = frozenset(rule.get("unmask", ()))
+        if keep not in scan_cache:
+            scan_cache[keep] = apply_masks(
+                text, span_map, [c for c in MASK_CLASSES if c not in keep])
+        return scan_cache[keep]
+
+    file_disabled, line_disabled = parse_suppressions(
+        text, known_ids, line_starts, blind_spans)
+
+    findings = []
+    for rule in rules:
+        genres = rule.get("genres", [])
+        applies = ("*" in genres) or (resolved in genres)
+        if not applies:
+            continue
+        rid = rule["id"]
+        recheck = rule.get("class") in SPLICE_RECHECK_CLASSES
+        for match_text, index in apply_rule(rule, _scan_for(rule), heuristics):
+            # The match came out of the masked copy, so a match that straddles a
+            # masked span would read as a run of blanks. Report what the author
+            # actually wrote: re-slice the same offsets from the raw document.
+            raw_match = text[index:index + len(match_text)]
+            # Splice guard: raw and masked differ only when the hit straddles a
+            # masked span, and such a hit is only real if the rule still matches
+            # the raw text. Drop it otherwise (MAJOR-1).
+            if (recheck and raw_match != match_text
+                    and not _survives_raw_recheck(rule, raw_match, heuristics)):
+                continue
+            match_text = raw_match
+            line_no = _line_of(line_starts, index)
+            suppressed, reason = _suppression_for(
+                rid, line_no, file_disabled, line_disabled
+            )
+            findings.append({
+                "rule_id": rid,
+                "severity": rule.get("severity", "warning"),
+                "message": rule.get("message", ""),
+                "line": line_no,
+                "match": match_text,
+                "span": [index, index + len(match_text)],
+                "genre": resolved,
+                "suppressed": suppressed,
+                "reason": reason,
+            })
+
+    findings.sort(key=lambda f: (f["span"][0], f["rule_id"]))
+    return {
+        "genre": resolved,
+        "excluded": False,
+        "catalog_version": meta.get("catalog_version"),
+        "findings": findings,
+    }
+
+
+def _suppression_for(rid, line_no, file_disabled, line_disabled):
+    if "all" in file_disabled:
+        return True, file_disabled.get("all")
+    if rid in file_disabled:
+        return True, file_disabled[rid]
+    bucket = line_disabled.get(line_no, {})
+    if "all" in bucket:
+        return True, bucket.get("all")
+    if rid in bucket:
+        return True, bucket[rid]
+    return False, None
+
+
+def exit_code_for(findings):
+    """0 clean/all-suppressed, 1 any active error, 2 only active warnings."""
+    active = [f for f in findings if not f["suppressed"]]
+    if any(f["severity"] == "error" for f in active):
+        return 1
+    if active:
+        return 2
+    return 0
+
+
+# --------------------------------------------------------------------------
+# output formatting
+# --------------------------------------------------------------------------
+
+def _reported(findings):
+    return [f for f in findings if not f["suppressed"]]
+
+
+def format_json(result):
+    reported = _reported(result["findings"])
+    payload = {
+        "genre": result["genre"],
+        "excluded": result["excluded"],
+        # M-5: stamp the rule-set version onto the payload so a finding kept in
+        # a log or a hook state file can be read against the catalog that
+        # produced it, not against whatever the catalog says later.
+        "catalog_version": result.get("catalog_version"),
+        "finding_count": len(reported),
+        "findings": [
+            {
+                "rule_id": f["rule_id"],
+                "severity": f["severity"],
+                "message": f["message"],
+                "line": f["line"],
+                "match": f["match"],
+                "span": f["span"],
+                "genre": f["genre"],
+            }
+            for f in reported
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def format_human(result, source_label):
+    if result["excluded"]:
+        return "{}: excluded internal doc, not linted.".format(source_label)
+    reported = _reported(result["findings"])
+    lines = []
+    header = "{} [genre: {}]".format(source_label, result["genre"])
+    if not reported:
+        lines.append(header + " -> clean")
+        return "\n".join(lines)
+    lines.append(header + " -> {} finding(s)".format(len(reported)))
+    for f in reported:
+        lines.append(
+            "  line {ln}: [{sev}] {rid}: {match!r}".format(
+                ln=f["line"], sev=f["severity"], rid=f["rule_id"],
+                match=f["match"],
+            )
+        )
+        lines.append("      {}".format(f["message"]))
+    suppressed = [f for f in result["findings"] if f["suppressed"]]
+    if suppressed:
+        lines.append("  ({} finding(s) suppressed by waiver)".format(
+            len(suppressed)))
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# CLI entry
+# --------------------------------------------------------------------------
+
+def _build_parser():
+    parser = _ArgParser(
+        prog="writing-lint",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Deterministic writing-standards linter over the Phase 1 "
+                    "rule catalog (stdlib only, no network, no LLM).",
+        epilog=(
+            "GENRE RESOLUTION (highest precedence first):\n"
+            "  1. --genre <name>\n"
+            "  2. `writing-genre: <name>` frontmatter / first-line override\n"
+            "  3. path convention (/emails/ -> emails, /marketing/ -> marketing,\n"
+            "     /aeo/ -> aeo-writing, /handbooks/ -> technical-handbooks,\n"
+            "     /agents/,/skills/,.claude/ -> agent-facing-instructions,\n"
+            "     /reports/,/replies/ -> session-replies-and-reports, *.eml -> emails)\n"
+            "  4. --surface hint (email/stop-reply/stop-file)\n"
+            "  5. base-voice (floor)\n"
+            "EXCLUSION: todo.md, completed-todo.md, notes.md, HANDOFF.md,\n"
+            "  CLAUDE.md (by basename) emit nothing and exit 0.\n\n"
+            "EXIT CODES:\n"
+            "  0  clean (or every finding suppressed by a waiver)\n"
+            "  1  at least one reported finding of severity 'error'\n"
+            "  2  reported findings, all of severity 'warning'\n"
+            "  3  usage error or internal failure\n\n"
+            "SUPPRESSION: a `writing-lint-disable: <rule-id>[ -- reason]` token\n"
+            "  silences that rule id (file-scope when alone on its line or in\n"
+            "  frontmatter; line-scope when trailing a content line);\n"
+            "  `writing-lint-disable: all` silences the whole file."
+        ),
+    )
+    parser.add_argument(
+        "input", nargs="?", default="-",
+        help="file path to lint, or '-' for stdin (default: stdin)",
+    )
+    parser.add_argument("--genre", default=None,
+                        help="force a genre (overrides path/frontmatter)")
+    parser.add_argument("--surface", default=None,
+                        help="surface hint: write|edit|stop-file|stop-reply|"
+                             "email (informational)")
+    parser.add_argument("--format", default="json", choices=["json", "human"],
+                        help="output format (default: json)")
+    parser.add_argument("--rules-dir", default=DEFAULT_RULES_DIR,
+                        help="override the rules catalog directory")
+    return parser
+
+
+def _read_input(input_arg):
+    """Return (text, path, source_label)."""
+    if input_arg == "-":
+        return sys.stdin.read(), None, "<stdin>"
+    if not os.path.exists(input_arg):
+        raise LintError("input file not found: {}".format(input_arg))
+    try:
+        with open(input_arg, encoding="utf-8") as f:
+            return f.read(), input_arg, input_arg
+    except OSError as exc:
+        raise LintError("cannot read input file: {}".format(exc))
+
+
+def main(argv=None):
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except LintError as exc:
+        print("writing-lint: {}".format(exc), file=sys.stderr)
+        return 3
+
+    if args.surface is not None and args.surface not in VALID_SURFACES:
+        print("writing-lint: invalid --surface {!r} (expected one of {})".format(
+            args.surface, ", ".join(sorted(VALID_SURFACES))), file=sys.stderr)
+        return 3
+
+    try:
+        text, path, label = _read_input(args.input)
+        result = lint_text(text, genre=args.genre, surface=args.surface,
+                           path=path, rules_dir=args.rules_dir)
+    except LintError as exc:
+        print("writing-lint: {}".format(exc), file=sys.stderr)
+        return 3
+
+    if args.format == "human":
+        print(format_human(result, label))
+    else:
+        print(format_json(result))
+
+    if result["excluded"]:
+        return 0
+    return exit_code_for(result["findings"])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
