@@ -542,6 +542,15 @@ if [ -d "$SCRIPT_DIR/claude/references" ]; then
   fi
 fi
 
+# Status line script: the quiet bar at the bottom of the screen (project + Helper Mode).
+if $DRY_RUN; then
+  log_dry "cp '$SCRIPT_DIR/claude/statusline.py' '$CLAUDE_DIR/statusline.py' && chmod +x it"
+else
+  cp "$SCRIPT_DIR/claude/statusline.py" "$CLAUDE_DIR/statusline.py"
+  chmod +x "$CLAUDE_DIR/statusline.py" 2>/dev/null || true
+  log_ok "Status line installed to ~/.claude/statusline.py"
+fi
+
 # Helper Mode default state: ON with a 7-day learning window, stamped install day.
 # Skip if a state file already exists (matches the kit's no-overwrite idiom), so a
 # re-install never resets a user who has already turned it off or moved past the week.
@@ -606,6 +615,18 @@ if os.path.exists(settings_path):
     except OSError as e:
         print(f"  [error] Cannot read {settings_path}: {e}", file=sys.stderr)
         sys.exit(1)
+
+# Top-level statusLine is an OBJECT key, not a hook array, so the hook-merge
+# below does not touch it. Install it only when the user has none yet (no-clobber:
+# respect an existing statusLine the user or another tool set). Idempotent: a
+# re-run sees the kit's own statusLine already present and leaves it be.
+frag_statusline = fragment.get('statusLine')
+if frag_statusline is not None:
+    if 'statusLine' in existing and existing.get('statusLine'):
+        print("  [ok] existing statusLine left as-is (no overwrite)")
+    else:
+        existing['statusLine'] = frag_statusline
+        print("  [ok] statusLine installed")
 
 # Deep-merge hooks: for each event type, append entries whose commands
 # are not already present in the existing hooks list.

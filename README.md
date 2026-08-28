@@ -102,6 +102,20 @@ conversation.
 You can also type `/explain` at any time to have the last answer rewritten in plain
 English.
 
+## The bar at the bottom of your screen
+
+While you work, a small line sits at the bottom of the Claude window. It is just a
+quiet reminder, not something you click. It shows three things:
+
+- the project you are in (the folder you are working in, or "home" when you are not
+  inside a project yet),
+- whether Helper Mode is on or off, so you always know if plain-English explanations
+  are running,
+- a nudge that typing `/help` lists your commands.
+
+There is nothing to set up and nothing to press. If you ever forget where you are or
+whether Helper Mode is on, glance at that bar.
+
 ## What the safety nets do for you
 
 These run quietly. You will only notice them if they stop something risky:
