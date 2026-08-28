@@ -56,6 +56,17 @@ hook_strictness: relaxed
 help_mode: on
 
 # -------------------------------------------------------------------
+# Status line detail
+# Controls the little bar at the bottom of the Claude window:
+#
+#   simple    — the plain bar for everyday use: project, Helper Mode,
+#               and a /help nudge (recommended). Default.
+#   technical — a developer bar: context usage, model, session cost,
+#               and git branch + changes. Switch with /statusline technical.
+# -------------------------------------------------------------------
+status_detail: simple
+
+# -------------------------------------------------------------------
 # Sacred files
 # Filenames that bypass index enforcement. Hooks never block writes to
 # these names, regardless of which directory they live in.

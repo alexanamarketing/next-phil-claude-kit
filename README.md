@@ -116,6 +116,10 @@ quiet reminder, not something you click. It shows three things:
 There is nothing to set up and nothing to press. If you ever forget where you are or
 whether Helper Mode is on, glance at that bar.
 
+To see technical details (for a developer), type `/statusline technical`. It swaps the
+bar for context usage, the model, the session cost, and your git branch and changes.
+Type `/statusline simple` to go back to the plain bar.
+
 ## What the safety nets do for you
 
 These run quietly. You will only notice them if they stop something risky:
