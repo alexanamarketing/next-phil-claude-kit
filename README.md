@@ -68,11 +68,12 @@ That is the whole rhythm: `/project`, work, `/sync`.
 
 ## What do I type (cheat-sheet)
 
-Six commands cover almost everything:
+These commands cover almost everything:
 
 - `/project` - open or continue a project to work on (or `/project system` the first
   time, to set up your profile).
 - `/new-project` - start a new project.
+- `/listing-video` - make a listing walkthrough video from the photos, one clip at a time, with the cost shown before anything runs.
 - `/sync` - save your progress at the end of a session. Do this before you close.
 - `/helper` - turn plain-English Helper Mode on or off, or check it.
 - `/explain` - if an answer had jargon, get it again in plain words.

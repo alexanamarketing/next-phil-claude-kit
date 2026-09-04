@@ -40,6 +40,7 @@ Help mode: [on/off]  (change with /help on or /help off)
 Commonly used commands:
   /project        - open or continue a project (use /project system the first time, to set up your profile)
   /new-project    - start a brand new project
+  /listing-video  - make a listing walkthrough video from the photos, one clip at a time, with the cost shown before anything runs
   /sync           - save your progress at the end of a session, or any time you want to save
   /helper         - turn the plain-English word-explainer on or off (it explains technical words as Claude talks)
   /explain        - ask Claude to say the last thing again in simpler words

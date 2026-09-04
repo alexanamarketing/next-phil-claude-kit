@@ -128,6 +128,7 @@ KIT_HOOK_LIB=(
 KIT_SKILLS=(
   project
   new-project
+  listing-video
   sync
   archive-docs
   doctor
