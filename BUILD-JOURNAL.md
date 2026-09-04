@@ -1,9 +1,9 @@
 # Build journal - listing-video skill
 
 <!-- state:listing-video-skill -->
-State: Phases 1-3 built and green; post-build Opus gate returned CLEAN (no blockers, no majors); its 3 minors folded and re-verified. Skill is complete and gated in the repo. NOT handed to Phil / NOT pushed (that is Anthony's deferred outward gate). Phase 4 vault reconcile done by the orchestrator.
-Next actor: Anthony
-Next action: decide delivery to Phil (re-pull / push the kit repo); nothing else blocks.
+State: built, gated (post-build Opus gate CLEAN), e2e-tested (6/6 scenarios, 20 paid calls all money-carded), pushed to origin/main (bdcbb86), and Phil emailed the update-and-use instructions (2026-09-04). Delivered; only ACCEPT (Phil's own first use) remains, outside this build.
+Next actor: person:phil
+Next action: none blocking; ACCEPT = Phil updates his kit and makes a listing video.
 Updated: 2026-09-04
 <!-- /state -->
 
