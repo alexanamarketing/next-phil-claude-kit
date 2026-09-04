@@ -186,9 +186,8 @@ def cmd_save(args):
     content = open(args.card).read()
 
     if os.path.exists(dest) and not args.overwrite and not args.keep_both:
-        existing = read_field(open(dest).read(), "title") or slug
-        print("You already have a scene with that name: \"%s\". "
-              "Tell me to overwrite it, keep both, or use a new name." % existing)
+        print("You already have a scene named \"%s\". "
+              "Tell me to overwrite it, keep both, or use a new name." % args.name)
         return 3
 
     if os.path.exists(dest) and args.keep_both:

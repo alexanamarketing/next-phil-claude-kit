@@ -64,14 +64,16 @@ through it," and stop there until they answer.
 Give the user the plain map in a few sentences, not a numbered list:
 
 - We test one clip first, about 22 credits, so you can see it and tune it.
-- Then we make the whole video, about 180 credits for a full eight-clip reel.
+- Then we make the whole video: a straight run of the seven starter scenes is about 158
+  credits, and a full eight-clip reel (when a listing needs an extra room) is about 180.
 - Nothing is charged until you say yes. A clip cannot be cancelled once it starts, so
   I always show you the cost first.
 - About 1 in 5 clips needs a quick redo, and that is normal, not your fault.
 
 Define the five words here (photo, clip, scene, video, credits). Then offer the
 quick-vs-learn choice up front: we can make the whole video from your starter scenes
-(about 180 credits), or make one clip first (about 22 credits) so you see how it works.
+(about 158 credits for the seven rooms, up to about 180 if a room needs a stand-in), or
+make one clip first (about 22 credits) so you see how it works.
 The first time, recommend one clip first.
 
 Fast path: if the library already holds scenes beyond the seven starters (the user has
@@ -111,6 +113,11 @@ Ask for the MLS number first, because the user knows those. With the MLS number,
 the public listing photos using the web-address pattern in `references/recipe.md`
 (count the photos up from the first one until there are no more), lay them out as one
 labeled sheet, read it, and match each photo to a room.
+
+If the pull returns nothing or fails (a wrong or off-market MLS number, or the photo
+host is down), do not push on and never invent a photo. Say so plainly: "I could not
+pull the photos for that MLS number. Want to double-check the number, or drag your own
+photos in instead?" Then use the drag-in path below.
 
 For the user's own photos, tell them the exact trick: "drag the photo file from Finder
 into this window and its location appears, then press return." Pick the file up from
@@ -175,6 +182,12 @@ match, change any." For a room the listing does not have, build a stand-in from 
 nearest starter scene, the way `references/recipe.md` explains (a home with no dining
 room might get a second bedroom). The front of the house is always first and the
 backyard is always last.
+
+Reuse what the user already paid for. If the one-clip test already made and approved a
+clip for one of these rooms this session (it is in this listing's `output/<slug>/`
+folder and passed the motion check), REUSE that clip in the reel. Do not regenerate it
+and do not charge for it again. On the batch money card, list that room as "already
+made, no charge" so the total only covers the new clips.
 
 Write the plan to `output/<listing-slug>/reel.json` (the shape is in
 `references/scene-card-format.md`) BEFORE you generate anything, so the work survives if

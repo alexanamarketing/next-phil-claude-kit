@@ -45,7 +45,8 @@ When Claude makes a whole video for one listing, it writes a small progress file
 to the clips, named reel.json, so the work is never lost if a session is interrupted.
 It holds:
 
-- listing: the listing slug and the address or MLS number.
+- listing: an object with the listing `slug` and its `mls` (or address), for example
+  `{"slug": "4136-palace-station", "mls": "7040686"}`.
 - clips: the planned clips in shot order, each with its scene name, the photo it came
   from, the job number, the downloaded clip file, and its motion result (moved or
   static).

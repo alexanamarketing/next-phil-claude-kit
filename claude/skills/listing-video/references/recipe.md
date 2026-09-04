@@ -7,9 +7,10 @@ any time and Claude opens this.
 
 ## What a finished video looks like
 
-A listing video is eight short clips, about five seconds each, joined into one reel of
-about forty seconds. The clips move outside-in and then back out, like a walk through
-the home:
+A listing video is about seven to eight short clips, about five seconds each, joined
+into one reel of about forty seconds. Your starter set has seven rooms; an eighth clip
+is added only when a listing needs a stand-in room. The clips move outside-in and then
+back out, like a walk through the home:
 
 - The first clip is always the front of the house.
 - The last clip is always the backyard or pool.
@@ -72,8 +73,11 @@ Claude passes them for you.
 Cost is measured in credits, and your plan refills them every month.
 
 - One clip is about 22 credits.
-- A full eight-clip video is about 180 credits.
+- A straight run of your seven starter scenes is about 158 credits. A full eight-clip
+  video (when a listing needs a stand-in room) is about 180 credits.
 - Every redo is a fresh clip, so it costs about 22 credits again.
+- A room you already made and approved this session is reused in the reel at no extra
+  charge; the batch cost only covers the new clips.
 
 Claude always shows you the cost and your balance before anything is charged, and
 nothing is charged until you say yes. A clip cannot be cancelled once it starts, so the
