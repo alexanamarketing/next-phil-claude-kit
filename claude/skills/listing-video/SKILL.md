@@ -179,10 +179,16 @@ backyard is always last.
 Write the plan to `output/<listing-slug>/reel.json` (the shape is in
 `references/scene-card-format.md`) BEFORE you generate anything, so the work survives if
 the session stops. Show ONE batch money card with every planned clip itemized and the
-total, get a yes, then submit every clip async. As each clip lands, give a progress
-line ("kitchen is done, 3 of 8"), run the motion check on it, and queue any redo with
-its own money card. Update `reel.json` as clips land, so `resume` can find the work
-next time.
+total, get a yes, then submit every clip async. If you are resuming a reel, the batch
+money card and the itemized list cover ONLY the clips not yet made, never the ones
+already paid for, so the total is the cost to finish, not to start over. Before you
+submit, check the batch total against the balance: if the balance cannot cover every
+planned clip (the "Balance after" line would drop below zero), do not start a batch that
+will run out partway and leave failed clips. Say so plainly and offer a shorter reel
+(fewer scenes) or a top-up first, then re-show the card. As each clip lands, give a
+progress line ("kitchen is done, 3 of 8"), run the motion check on it, and queue any
+redo with its own money card. Update `reel.json` as clips land, so `resume` can find the
+work next time.
 
 ## If the credits run out partway through
 
@@ -198,6 +204,10 @@ The `reel.json` keeps the partial state, so next time the resume check finds it 
 offers to finish.
 
 ## Stitch, open, and the watermark check
+
+Before you join, drop any clip that is still marked "did not move" (a redo the user
+declined or could not fund), so a static clip never lands in the finished video. Tell
+the user which room you left out and why, in one plain line.
 
 Join the clips with `python3 <TOOLS>/stitch.py --out <reel.mp4> <clip1> <clip2> ...`,
 in shot order, in the listing's output folder. The join is a clean hard cut between
