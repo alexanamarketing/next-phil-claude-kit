@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -uo pipefail
+LOG="${MOCK_HIGGS_LOG:?}"; CREDITS_FILE="${MOCK_HIGGS_CREDITS_FILE:?}"
+CLIP_MOVING="${MOCK_HIGGS_CLIP_MOVING:?}"; CLIP_STATIC="${MOCK_HIGGS_CLIP_STATIC:?}"
+STATIC_ON="${MOCK_HIGGS_STATIC_ON:-}"; JOBS_DIR="${MOCK_HIGGS_JOBS_DIR:?}"; COST=22.5
+mkdir -p "$JOBS_DIR"
+log(){ echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
+credits(){ cat "$CREDITS_FILE" 2>/dev/null || echo 0; }
+sub="${1:-}"; shift || true
+case "$sub" in
+  account)
+    a="${1:-}"; shift || true
+    case "$a" in
+      status) log "account status"; printf '{"credits": %s}\n' "$(credits)";;
+      transactions) log "account transactions";
+        echo -n '{"transactions":['; first=1
+        for f in "$JOBS_DIR"/*.job; do [ -e "$f" ] || continue; [ $first -eq 1 ] || echo -n ','; first=0
+          printf '{"id":"%s","credits":-%s,"model":"seedance_2_0"}' "$(basename "$f" .job)" "$COST"; done
+        echo ']}';;
+      *) echo "{}";;
+    esac;;
+  generate)
+    a="${1:-}"; shift || true
+    case "$a" in
+      create)
+        n=$(( $(ls "$JOBS_DIR"/*.job 2>/dev/null | wc -l) + 1 ))
+        log "generate create #$n :: $*"
+        cur=$(credits); new=$(python3 -c "print(round($cur-$COST,2))"); echo "$new" > "$CREDITS_FILE"
+        jid="job$(printf '%03d' "$n")"; clip="$CLIP_MOVING"
+        IFS=',' read -ra arr <<< "$STATIC_ON"; for s in "${arr[@]:-}"; do [ "${s:-}" = "$n" ] && clip="$CLIP_STATIC"; done
+        echo "$clip" > "$JOBS_DIR/$jid.job"; printf '{"id":"%s","status":"queued"}\n' "$jid";;
+      get) jid="${1:-}"; clip=$(cat "$JOBS_DIR/$jid.job" 2>/dev/null || echo "")
+        log "generate get $jid"; printf '{"id":"%s","status":"completed","result_url":"%s"}\n' "$jid" "$clip";;
+      list) log "generate list"; echo '{"jobs":[]}';;
+      *) echo "{}";;
+    esac;;
+  *) echo "{}";;
+esac

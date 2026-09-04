@@ -44,3 +44,6 @@ claude/hooks/state/
 # internal build provenance, kept local, not for public release
 plans/
 docs/GAP-ANALYSIS.md
+
+# listing-video e2e harness generated sandbox
+tests/e2e/sandbox/
