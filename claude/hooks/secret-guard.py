@@ -318,7 +318,7 @@ def _abs_dir(path, base):
 # Words that can sit in front of a command without changing which command it
 # is (`if cd B; then`, `{ cd B; }`, `builtin cd B`), and NAME=value prefixes.
 PREFIX_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "{", "}",
-                "!", "builtin", "command", "time", "nohup", "exec"}
+                "!", "builtin", "command", "time", "nohup", "exec", "env"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
@@ -337,6 +337,12 @@ def _scoped_segments(tokens):
         if skip_next:
             skip_next = False
             continue
+        if tok in ("<(", ">("):
+            # Process substitution: its `)` closes this, not the enclosing
+            # subshell.
+            flush()
+            items.append(("open",))
+            continue
         if tok and set(tok) <= set("<>&") and ("<" in tok or ">" in tok):
             if current and current[-1].isdigit():
                 current.pop()
@@ -353,6 +359,13 @@ def _scoped_segments(tokens):
         current.append(tok)
     flush()
     return items
+
+
+def _needs_shell(path):
+    """True when a path still holds $ or a backtick after expanding the
+    variables this process can see: only the shell can tell where it points."""
+    p = os.path.expandvars(path)
+    return "$" in p or "`" in p
 
 
 def _dir_arg(args):
@@ -389,6 +402,8 @@ def _segment_git_dir(segment, base, env=None):
             elif arg == "--work-tree" and nxt is not None:
                 work_tree = nxt
             j += 2 if arg in GIT_GLOBAL_VALUE_OPTS else 1
+        if any(v is not None and _needs_shell(v) for v in (git_dir, work_tree)) or _needs_shell(d):
+            return None
         if work_tree:
             return _abs_dir(work_tree, d)
         if git_dir:
@@ -398,7 +413,7 @@ def _segment_git_dir(segment, base, env=None):
     return base
 
 
-def push_scan_plan(command, session_cwd):
+def push_scan_plan(command, session_cwd, backups=None):
     """[(repo folder, revs)] for every `git push` in the command, each read in
     its OWN repo: its -C / --git-dir / --work-tree / GIT_DIR=, else the folder
     the shell is in by then (cd and pushd/popd, also behind if/then/{/builtin/
@@ -406,14 +421,22 @@ def push_scan_plan(command, session_cwd):
     revs None = a delete-only push. Anything the parser cannot read falls back
     to one broad scan in the best-effort repo, as before. main() also always
     scans the repo the older single-repo rule picks, so this plan can only add
-    repos to the scan, never drop that one."""
+    repos to the scan, never drop that one.
+
+    A repo of None means the push names its repo through a value only the
+    shell can expand (`git -C "$X"`, `GIT_DIR=$d`): main() blocks it. When
+    the scope tracking cannot be trusted (a `)` with no open scope, or a
+    `case`), every folder the shell has been in, plus the session cwd, is
+    added to `backups` as (folder, revs) for each later push."""
     fallback = [(resolve_repo_cwd(command, session_cwd), list(BROAD_REVS))]
     try:
         items = _scoped_segments(_tokens(command))
     except ValueError:
         return fallback
     plan, here, found = [], session_cwd, False
-    scopes, dirstack = [], []
+    scopes, dirstack, previous = [], [], None
+    visited = [session_cwd]
+    untrusted = any(item[0] == "seg" and "case" in item[1] for item in items)
     for item in items:
         if item[0] == "open":
             scopes.append((here, list(dirstack)))
@@ -421,6 +444,8 @@ def push_scan_plan(command, session_cwd):
         if item[0] == "close":
             if scopes:
                 here, dirstack = scopes.pop()
+            else:
+                untrusted = True
             continue
         segment, env, k = item[1], {}, 0
         while k < len(segment) and (segment[k] in PREFIX_WORDS or ASSIGN_RE.match(segment[k])):
@@ -433,15 +458,20 @@ def push_scan_plan(command, session_cwd):
             continue
         head = segment[0]
         if head == "cd":
-            target = _dir_arg(segment[1:])
-            if target and target != "-":
-                here = _abs_dir(target, here)
+            target = "-" if segment[1:] == ["-"] else _dir_arg(segment[1:])
+            if target == "-":
+                if previous is not None:
+                    here, previous = previous, here
+            elif target:
+                previous, here = here, _abs_dir(target, here)
+                visited.append(here)
             continue
         if head == "pushd":
             target = _dir_arg(segment[1:])
             if target:
                 dirstack.append(here)
                 here = _abs_dir(target, here)
+                visited.append(here)
             continue
         if head == "popd":
             if dirstack:
@@ -453,8 +483,14 @@ def push_scan_plan(command, session_cwd):
         found = True
         pushed = _revs_for_push(args)
         repo = _segment_git_dir(segment, here, env)
-        plan.append((repo if os.path.isdir(repo) else session_cwd,
-                     list(BROAD_REVS) if pushed is None else (pushed or None)))
+        revs = list(BROAD_REVS) if pushed is None else (pushed or None)
+        if repo is not None and not os.path.isdir(repo):
+            repo = session_cwd
+        plan.append((repo, revs))
+        if untrusted and backups is not None and revs is not None:
+            for folder in visited:
+                if (folder, revs) not in backups:
+                    backups.append((folder, revs))
     return plan if found else fallback
 
 
@@ -478,6 +514,15 @@ def resolve_revs(revs, cwd):
         if sha not in out:
             out.append(sha)
     return out
+
+
+def is_repo(folder):
+    """True when `folder` is inside a git repo (work tree or bare)."""
+    if not folder or not os.path.isdir(folder):
+        return False
+    proc = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=folder,
+                          capture_output=True, text=True)
+    return proc.returncode == 0
 
 
 def resolvable(revs, cwd):
@@ -519,19 +564,38 @@ def main() -> int:
     if is_commit:
         scans.append(("commit", ["git", "--pre-commit", "--staged"], cwd))
     if is_push:
-        plan = push_scan_plan(command, payload.get("cwd", ""))
-        # Safety net: also scan the repo the older single-repo rule picks (the
-        # first -C, else the last cd before git, else the session cwd), so a
-        # parser gap in the per-push plan is never worse than before.
+        backups = []
+        plan = push_scan_plan(command, payload.get("cwd", ""), backups)
+        if any(repo is None and revs is not None for repo, revs in plan):
+            print(
+                "secret-guard: cannot tell which repo this push runs in (its -C, "
+                "--git-dir, --work-tree or GIT_DIR value needs the shell to expand), "
+                "so it is blocked rather than scanned in the wrong repo. Run it as "
+                "`git -C /absolute/path/to/repo push ...`.",
+                file=sys.stderr,
+            )
+            return 2
+        entries = [(repo, revs, True) for repo, revs in plan]
         if any(revs is not None for _, revs in plan):
+            # Safety net: also scan the repo the older single-repo rule picks
+            # (the first -C, else the last cd before git, else the session
+            # cwd), plus every folder an untrusted scope may have left the
+            # shell in. Backups run only in a real repo and only for refs that
+            # resolve there, never as a broad scan, so they cannot block a
+            # clean push from a plain folder.
             legacy = push_scan_revs(command)
             if legacy is not None and cwd not in {repo_root(r) for r, _ in plan}:
-                plan.append((cwd, legacy))
-        for repo, revs in plan:
+                entries.append((cwd, legacy, False))
+            entries += [(folder, revs, False) for folder, revs in backups]
+        for repo, revs, primary in entries:
             if revs is None:
+                continue
+            if not primary and not is_repo(repo):
                 continue
             root = repo_root(repo)
             ids = resolve_revs(revs, root)
+            if ids is None and not primary:
+                continue
             if ids is None:
                 # A ref git cannot resolve here (a typo, a remote-only name):
                 # scan every local branch and tag instead of guessing.
