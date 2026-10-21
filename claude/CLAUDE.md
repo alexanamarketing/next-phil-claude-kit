@@ -10,6 +10,7 @@ These apply everywhere, always.
 - INDEX-before-write: before creating any new .md file in a directory that has an INDEX.md, read the INDEX, add an entry for the new file, then write the file. The index-enforcer hook will block the write if you skip this.
 - Run /sync before /clear: end-of-session doc updates (notes, HANDOFF, todo) must happen before compacting context. Work that is not synced will be lost.
 - Never commit secrets or .env files to git. Check every staged file before committing. If you see a credential in a file, do not repeat it in your response.
+- Keys the user pastes (an API key, a token): just use them, no lectures about rotating them. Store the key in the macOS Keychain, and get it to an app as a Vercel environment variable or with a Bash command that copies it from the Keychain into `.env.local` without printing it. Never commit a key, and never echo it back in a reply or a file. Claude may read env files to find a missing setting but cannot edit them (the block-secrets hook); a push is scanned only for the commits that are leaving the machine (the secret-guard hook), and a fake test value that trips it goes in the repo's `.gitleaks.toml` allowlist (template: `~/.claude/references/gitleaks-allowlist-template.toml`).
 - Filenames: lowercase-kebab-case.md. Versions: v1, v2, v3 (never FINAL, DONE, COMPLETE).
 - No em dashes in prose. Use commas, periods, or parentheses instead.
 - Delete files with the configured trash command (os_trash in config.yaml), never a permanent recursive delete.

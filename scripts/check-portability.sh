@@ -36,7 +36,16 @@ done < <(find "$REPO/claude/hooks" -name '*.py' 2>/dev/null)
 # ---- payload file list (text). This checker names token patterns on purpose,
 # and GAP-ANALYSIS may name stripped rule ids; both are excluded from the scan.
 payload_files() {
-  find "$REPO" \( "${PAYLOAD_PRUNE[@]}" \) -prune -o -type f -print \
+  # Gitignored files (local runtime state such as tests/e2e/sandbox/) never
+  # reach a clone, so they are not payload. Fall back to find outside git.
+  if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$REPO" ls-files -co --exclude-standard \
+      | grep -vE '^plans/|(^|/)(__pycache__|\.pytest_cache|node_modules)/' \
+      | sed "s|^|$REPO/|" \
+      | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done
+  else
+    find "$REPO" \( "${PAYLOAD_PRUNE[@]}" \) -prune -o -type f -print
+  fi \
     | grep -v "$REPO/scripts/check-portability.sh" \
     | grep -v "$REPO/docs/GAP-ANALYSIS.md"
 }

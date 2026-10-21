@@ -24,7 +24,7 @@ This location is owned by Claude Code, not by this repo. The installer copies th
 ### What this realtor kit adds over the base kit
 
 - Signature features: a self-learning tool memory (the tool-module engine + `/toolupdate`) and Helper Mode (`helper-mode.py` + `/helper`).
-- Safety hooks: `command-guard.py`, `secret-guard.py`, and the newer `block-secrets.py`.
+- Safety hooks: `command-guard.py`; `secret-guard.py` (gitleaks on commit and push, run from the repo root; a push scans only the commits no remote has, `HEAD --not --remotes`; a malformed `.gitleaks.toml` is reported, not treated as a leak); `block-secrets.py` (Read always allowed, Edit/Write blocked on an exact set of secret-file names). Both are proven by `tests/test_secret_hooks.py` against the pre-run copies in `tests/fixtures/pre-run/`. Repos with fake test tokens use a `.gitleaks.toml` allowlist shaped like `claude/references/gitleaks-allowlist-template.toml`.
 - Git-backed-invisible: the installer git-inits the vault, `auto-stage.sh` (PostToolUse) stages every edit, and `auto-commit.sh` (Stop) commits them, so the user's work saves itself with no git commands.
 - Advisory quality: `claude-md-hygiene.py` and the trimmed `writing-lint` stack, both warn-only.
 - Skills/agent: `/explain`, `/helper`, `/toolupdate`, `unslop`, and the `aeo-copywriter` agent.

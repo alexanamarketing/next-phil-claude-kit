@@ -1,0 +1,30 @@
+# Template for a repo's .gitleaks.toml (documentation, not installed by setup).
+#
+# Use it when the secret-guard hook blocks a commit or push on a value that is
+# NOT a real secret: a fake key in a unit test, a placeholder, a public id in a
+# journal. Copy this file to the repo ROOT as .gitleaks.toml, then narrow both
+# lists to the real findings (the hook prints file, line and rule, redacted).
+#
+# Three rules that keep this safe:
+# 1. Keep `[extend] useDefault = true`. Without it the allowlist REPLACES the
+#    built-in rules with nothing and gitleaks stops finding anything at all.
+# 2. `condition = "AND"`: a finding is skipped only when BOTH its file matches
+#    `paths` AND the flagged text matches one of `regexes`. A real key in the
+#    same test file, or the same placeholder anywhere else, is still caught.
+# 3. Describe a finding in plain words here, never paste the flagged value into
+#    a comment (the comment itself would then be flagged).
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake placeholder values in unit tests (not real credentials)"
+condition = "AND"
+regexTarget = "match"
+paths = [
+  '''(^|/)[^/]+\.test\.(ts|tsx|js|jsx|mjs)$''',
+]
+regexes = [
+  # A counting placeholder such as the 0-9 then a-f hex run used for fake tokens.
+  '''0123456789abcdef''',
+]

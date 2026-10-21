@@ -3,13 +3,22 @@
 
 Runs gitleaks before anything leaves the machine:
   commit -> scan the STAGED diff (`gitleaks git --pre-commit --staged`)
-  push   -> scan UNPUSHED commits (`--log-opts=@{u}..HEAD`); with no
-            upstream yet (first push), scan the last 20 commits as a
-            bounded approximation.
+  push   -> scan only the commits no remote has yet
+            (`--log-opts=HEAD --not --remotes`). Commits already on any
+            remote (main's history, commits pulled in by a rebase) are never
+            rescanned, so a first push or a rebased branch is judged only on
+            what it actually adds.
+A command that does both (`git commit ... && git push`) runs both scans.
+
+gitleaks runs from the repo ROOT (`git rev-parse --show-toplevel`), because
+it loads `.gitleaks.toml` only from its working directory; a command run
+from a subfolder would otherwise ignore the repo's allowlist.
 
 Exit 2 (block) only when gitleaks reports findings (its exit code 1).
-Any other failure (not installed, config error, not a repo) fails OPEN
-with a stderr note: a broken scanner must not brick every commit.
+gitleaks also exits 1 when `.gitleaks.toml` is malformed ("unable to load
+gitleaks config"); that is reported as a config error and allowed. Any other
+failure (not installed, not a repo) fails OPEN with a stderr note: a broken
+scanner must not brick every commit.
 
 Findings print with --redact so the secret itself never lands in the
 session transcript, which is a file on disk.
@@ -77,15 +86,22 @@ def run_gitleaks(args, cwd):
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
-def has_upstream(cwd):
-    return (
-        subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "@{u}"],
+def repo_root(cwd):
+    """The repo's top-level folder, so gitleaks finds the root .gitleaks.toml."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
             cwd=cwd or None,
             capture_output=True,
-        ).returncode
-        == 0
-    )
+            text=True,
+        )
+    except Exception:
+        return cwd
+    root = proc.stdout.strip()
+    return root if proc.returncode == 0 and root else cwd
+
+
+CONFIG_ERROR = "unable to load gitleaks config"
 
 
 def main() -> int:
@@ -104,7 +120,7 @@ def main() -> int:
     if not (is_commit or is_push):
         return 0
 
-    cwd = resolve_repo_cwd(command, cwd)
+    cwd = repo_root(resolve_repo_cwd(command, cwd))
 
     if not shutil.which("gitleaks"):
         print(
@@ -113,30 +129,42 @@ def main() -> int:
         )
         return 0
 
-    try:
-        if is_commit:
-            code, out = run_gitleaks(["git", "--pre-commit", "--staged"], cwd)
-        else:
-            log_opts = "@{u}..HEAD" if has_upstream(cwd) else "-n 20"
-            code, out = run_gitleaks(["git", f"--log-opts={log_opts}"], cwd)
-    except Exception as exc:
-        print(f"secret-guard: gitleaks failed to run ({exc}), scan skipped", file=sys.stderr)
-        return 0
+    scans = []
+    if is_commit:
+        scans.append(("commit", ["git", "--pre-commit", "--staged"]))
+    if is_push:
+        scans.append(("push", ["git", "--log-opts=HEAD --not --remotes"]))
 
-    if code == 1:
-        action = "commit" if is_commit else "push"
-        print(
-            f"secret-guard: gitleaks found potential secrets, {action} blocked.\n"
-            f"{out}\n"
-            "Remove or rotate the secret, or add a .gitleaks.toml allowlist entry "
-            "if it is a confirmed false positive. Do not repeat the secret value "
-            "back to the user.",
-            file=sys.stderr,
-        )
-        return 2
+    for action, args in scans:
+        try:
+            code, out = run_gitleaks(args, cwd)
+        except Exception as exc:
+            print(f"secret-guard: gitleaks failed to run ({exc}), scan skipped", file=sys.stderr)
+            continue
 
-    if code not in (0, 1):
-        print(f"secret-guard: gitleaks error (exit {code}), scan skipped:\n{out}", file=sys.stderr)
+        if CONFIG_ERROR in out:
+            print(
+                "secret-guard: this repo's .gitleaks.toml could not be read, so the "
+                f"{action} scan was skipped (config error, not a leak). Fix the toml:\n{out}",
+                file=sys.stderr,
+            )
+            continue
+
+        if code == 1:
+            print(
+                f"secret-guard: gitleaks found potential secrets, {action} blocked.\n"
+                f"{out}\n"
+                "If the finding is a real key, take it out of the file and keep it in "
+                "your keychain or a Vercel env var instead. If it is a fake test value "
+                "or a harmless id (a confirmed false positive), add it to the repo's "
+                ".gitleaks.toml allowlist (path plus a regex for that value) and retry. "
+                "Do not repeat the secret value back to the user.",
+                file=sys.stderr,
+            )
+            return 2
+
+        if code != 0:
+            print(f"secret-guard: gitleaks error (exit {code}), scan skipped:\n{out}", file=sys.stderr)
 
     return 0
 

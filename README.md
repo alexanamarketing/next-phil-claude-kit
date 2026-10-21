@@ -40,7 +40,9 @@ Applications > Utilities > Terminal.
    ```
 
    Say yes to each step. If it offers to install `gitleaks` (a tool that double-checks
-   nothing secret gets saved), yes is a good choice, but it is optional.
+   nothing secret gets saved), yes is a good choice, but it is optional. When it is
+   installed, a push is checked only for the work that is leaving your computer, and
+   Claude can read your env files but never edit them.
 
 2. Log in to Claude, then install the setup:
 

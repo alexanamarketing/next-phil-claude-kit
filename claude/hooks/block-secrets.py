@@ -1,33 +1,44 @@
 #!/usr/bin/env python3
 """
-Block Claude from reading/editing sensitive files.
-Exit codes: 0=allow, 1=error, 2=block (stderr fed to Claude)
+Stop Claude from WRITING to files that hold real secrets.
+
+Read is always allowed: Claude may need to look at an env file to tell you
+which setting is missing, and it never repeats a value back (CLAUDE.md rule).
+Edit, Write and MultiEdit are blocked on an exact set of secret-file names,
+matched on the file name or its folder, never on a word that merely appears
+somewhere in the path (so `api-key-form.tsx` or `secrets-panel.tsx` are fine).
+The hook reads `tool_name` from the payload to tell Read from Edit/Write; a
+payload with no tool_name is treated as a write.
+
+Blocked for Edit/Write/MultiEdit:
+  .env and .env.<anything>, except .env.example / .env.sample / .env.template
+  .envrc .npmrc .pypirc .netrc .git-credentials
+  *.pem *.key *.p12 *.pfx *.jks *.keystore
+  id_rsa id_ed25519 id_ecdsa id_dsa (exact names)
+  credentials, credentials.json, service-account*.json, secrets.json, secrets.yml/.yaml
+  anything under ~/.ssh/ or ~/.aws/, and ~/.claude/.credentials.json
+
+Exit codes: 0=allow, 2=block (stderr fed to Claude)
 """
 import json
-import sys
 import os
+import sys
 
-# Patterns to block
-BLOCKED_PATTERNS = [
-    '.env',
-    'credentials',
-    'secrets',
-    'api-key',
-    'api_key',
-    '.pem',
-    '.key',
-]
+READ_TOOLS = {'Read'}
 
-# Exceptions (allowed even if they match blocked patterns)
-ALLOWED_EXCEPTIONS = [
-    '.env.example',
-    '.env.template',
-    '.env.sample',
-]
+ENV_ALLOWED_SUFFIXES = ('.example', '.sample', '.template')
+
+EXACT_NAMES = {
+    '.env', '.envrc', '.npmrc', '.pypirc', '.netrc', '.git-credentials',
+    'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa',
+    'credentials', 'credentials.json', 'secrets.json', 'secrets.yml', 'secrets.yaml',
+}
+
+KEY_SUFFIXES = ('.pem', '.key', '.p12', '.pfx', '.jks', '.keystore')
 
 # Explicit path-substring allowlist (sidecar file, one entry per line, '#' comments).
-# For SOURCE files that falsely match a blocked pattern (e.g. realtor_secrets.ts defines
-# functions, holds no secret values). Keep narrow; never list .env/credential stores.
+# For a file that matches a blocked name but holds no secret value. Keep narrow;
+# never list a real .env or credential store.
 ALLOWLIST_FILE = os.path.expanduser('~/.claude/hooks/block-secrets-allow.txt')
 
 
@@ -40,48 +51,65 @@ def is_allowlisted(file_path_lower):
                     continue
                 if entry in file_path_lower:
                     return True
-    except FileNotFoundError:
-        return False
     except Exception:
         return False
     return False
 
 
+def under(path, folder):
+    folder = os.path.normcase(os.path.abspath(os.path.expanduser(folder)))
+    return path == folder or path.startswith(folder + os.sep)
+
+
+def blocked_reason(file_path):
+    """Returns why the path is a secret file, or None when it is not one."""
+    full = os.path.normcase(os.path.abspath(os.path.expanduser(file_path)))
+    name = os.path.basename(full).lower()
+
+    if name.startswith('.env.'):
+        if name.endswith(ENV_ALLOWED_SUFFIXES):
+            return None
+        return 'an env file'
+    if name in EXACT_NAMES:
+        return 'a secret file name'
+    if name.endswith(KEY_SUFFIXES):
+        return 'a key or certificate file'
+    if name.startswith('service-account') and name.endswith('.json'):
+        return 'a service account key'
+    if under(full, '~/.ssh') or under(full, '~/.aws'):
+        return 'a file in your SSH or AWS key folder'
+    if full == os.path.normcase(os.path.abspath(os.path.expanduser('~/.claude/.credentials.json'))):
+        return "Claude's own login file"
+    return None
+
+
 def main():
     try:
         data = json.load(sys.stdin)
-    except json.JSONDecodeError:
+    except Exception:
         sys.exit(0)  # Allow if can't parse
 
-    tool_input = data.get('tool_input', {})
+    if data.get('tool_name') in READ_TOOLS:
+        sys.exit(0)  # Reading is allowed; values are never repeated back
 
-    # Get file path from different tool input formats
+    tool_input = data.get('tool_input', {}) or {}
     file_path = tool_input.get('file_path', '') or tool_input.get('path', '')
+    if not file_path or not isinstance(file_path, str):
+        sys.exit(0)
 
-    if not file_path:
-        sys.exit(0)  # Allow if no file path
+    reason = blocked_reason(file_path)
+    if reason is None:
+        sys.exit(0)
 
-    # Normalize path
-    file_path_lower = file_path.lower()
-    basename = os.path.basename(file_path_lower)
+    if is_allowlisted(file_path.lower()):
+        sys.exit(0)
 
-    # Check exceptions first
-    for exception in ALLOWED_EXCEPTIONS:
-        if basename.endswith(exception):
-            sys.exit(0)  # Allow
+    print(f"BLOCKED: writing to '{os.path.basename(file_path)}' denied ({reason}).", file=sys.stderr)
+    print("Secret files are changed by you, not by Claude. To give an app a key, put it in a "
+          "Vercel environment variable, or ask Claude to copy it from your Keychain into "
+          ".env.local with a Bash command that never prints it.", file=sys.stderr)
+    sys.exit(2)
 
-    # Explicit allowlist (narrow source-file exemptions)
-    if is_allowlisted(file_path_lower):
-        sys.exit(0)  # Allow
-
-    # Check blocked patterns
-    for pattern in BLOCKED_PATTERNS:
-        if pattern in file_path_lower:
-            print(f"BLOCKED: Access to '{os.path.basename(file_path)}' denied (matches '{pattern}')", file=sys.stderr)
-            print("If you genuinely need to open this file, do it yourself outside Claude.", file=sys.stderr)
-            sys.exit(2)  # Block and feed stderr to Claude
-
-    sys.exit(0)  # Allow
 
 if __name__ == '__main__':
     main()
