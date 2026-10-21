@@ -645,6 +645,51 @@ def test_push_whose_repo_path_needs_the_shell_is_blocked():
         sb.cleanup()
 
 
+def test_toplevel_idiom_and_shell_cd_do_not_block_a_clean_push():
+    """(F5 kit re-review 2, finding 10) `cd "$(git rev-parse --show-toplevel)"`
+    and `git -C "$(git rev-parse --show-toplevel)"` name the repo the shell is
+    already in; a clean push through them stays allowed."""
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        r = sb.repo()
+        sb.write(r, "sub/page.txt", "clean\n")
+        sb.commit(r, "clean unpushed")
+        sub = os.path.join(r, "sub")
+        for case, command in [
+            ("F5 cd quoted toplevel", 'cd "$(git rev-parse --show-toplevel)" && git push'),
+            ("F5 cd unquoted toplevel", "cd $(git rev-parse --show-toplevel) && git push origin main"),
+            ("F5 cd backtick toplevel", "cd `git rev-parse --show-toplevel` && git push"),
+            ("F5 -C quoted toplevel", 'git -C "$(git rev-parse --show-toplevel)" push'),
+        ]:
+            code, err = run_hook("new", "secret-guard", bash(command, sub), sb.env)
+            RESULTS.append((case, None, code))
+            assert code == 0, f"{case}: new={code}\n{_head(err)}"
+    finally:
+        sb.cleanup()
+
+
+def test_push_hidden_in_bash_c_still_gets_the_older_broad_scan():
+    """(F5 kit re-review 2, finding 11) a push inside `bash -c` is invisible to
+    the per-push plan; the older rule's repo then gets ecb18e4's broad scan
+    when the other push's refs do not resolve there."""
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        a, b = _two_repo_sandbox(sb, "B")
+        sb.git(a, "branch", "feat")
+        sb.git(a, "push", "-q", "origin", "feat")
+        for case, command in [
+            ("F5 bash -c cd B push, then push feat", f"bash -c 'cd {b} && git push origin main' && git push origin feat"),
+            ("F5 sh -c cd B push; push feat", f'sh -c "cd {b}; git push origin main" ; git push origin feat'),
+        ]:
+            code, err = run_hook("new", "secret-guard", bash(command, a), sb.env)
+            RESULTS.append((case, None, code))
+            assert code == 2, f"{case}: new={code}\n{_head(err)}"
+    finally:
+        sb.cleanup()
+
+
 def test_push_scan_plan_table():
     """push_scan_plan alone: (command, session cwd) -> [(repo, revs)]."""
     guard = _load_new_guard()
