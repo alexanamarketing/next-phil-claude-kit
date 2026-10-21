@@ -28,6 +28,10 @@ secret-guard.py (gitleaks on git commit/push):
       value flags -o/--push-option/--repo/--receive-pack, --tags and
       --follow-tags, `&&` chains, delete refspecs, a ref the parser cannot
       read) are covered old-vs-new and by a direct parser table.
+  (F5) a branch named like a top-level folder (`git push origin tests`) is
+      scanned by its commit id, not the ambiguous name (old and the G3 hook
+      both let it through with "0 commits scanned"); `git -C A push && git -C
+      B push` scans each repo, not only A.
 block-secrets.py (Read/Edit/Write/MultiEdit on sensitive files):
   (6) Read is always allowed now (Read .env: old blocks, new allows)
   (7) Edit/Write on real secret files is blocked (exact names, not substrings)
@@ -436,6 +440,64 @@ def test_push_of_clean_or_deleted_refs_stays_allowed():
             ("G3 --repo value is not a ref", "git push --repo=origin"),
         ]:
             compare(case, "secret-guard", bash(command, work), sb.env, old=0, new=0)
+    finally:
+        sb.cleanup()
+
+
+# (F5) A push of a branch whose name is also a top-level path (`tests`, `docs`)
+# made `git log tests --not --remotes` fail as ambiguous; gitleaks then logged
+# "stderr is not empty", scanned 0 commits and exited 0, so the push went out
+# unscanned. The scan now passes resolved commit ids and a scan that errors
+# blocks instead of passing.
+def test_push_of_branch_named_like_a_path_is_scanned():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        work = sb.repo()
+        sb.write(work, "tests/keep.txt", "a top-level folder named tests\n")
+        sb.commit(work, "tests folder")
+        sb.git(work, "push", "-q", "origin", "main")
+        sb.git(work, "checkout", "-q", "-b", "tests")
+        sb.write(work, "app.cfg", token_line())
+        sb.commit(work, "token on a branch named like a folder")
+        sb.git(work, "checkout", "-q", "main")
+        for case, command in [
+            ("F5 branch named like a path, bare name", "git push origin tests"),
+            ("F5 branch named like a path, refspec", "git push origin tests:tests"),
+            ("F5 branch named like a path, -u", "git push -u origin tests"),
+        ]:
+            compare(case, "secret-guard", bash(command, work), sb.env, old=0, new=2)
+    finally:
+        sb.cleanup()
+
+
+# (F5) `git -C A push ... && git -C B push ...` scanned repo A only (the first
+# -C), so a token in repo B went out. Each push segment is scanned in its own
+# repo: its own -C, else the last `cd` before it, else the session cwd.
+def test_joined_push_of_two_repos_scans_each_repo():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        clean = sb.repo()
+        remote_b = os.path.join(sb.dir, "remote-b.git")
+        repo_b = os.path.join(sb.dir, "repo-b")
+        sb.git(sb.dir, "init", "-q", "--bare", remote_b)
+        sb.git(sb.dir, "clone", "-q", remote_b, repo_b)
+        sb.write(repo_b, "README.md", "second repo\n")
+        sb.commit(repo_b, "init")
+        sb.git(repo_b, "push", "-q", "origin", "main")
+        sb.write(repo_b, "app.cfg", token_line())
+        sb.commit(repo_b, "unpushed token in the second repo")
+        for case, command in [
+            ("F5 two -C pushes joined, token in the second repo",
+             f"git -C {clean} push origin main && git -C {repo_b} push origin main"),
+            ("F5 -C push then cd and push, token in the second repo",
+             f"git -C {clean} push origin main && cd {repo_b} && git push origin main"),
+        ]:
+            compare(case, "secret-guard", bash(command, sb.dir), sb.env, old=0, new=2)
+        compare("F5 two -C pushes joined, both clean", "secret-guard",
+                bash(f"git -C {clean} push origin main && git -C {clean} push origin main", sb.dir),
+                sb.env, old=0, new=0)
     finally:
         sb.cleanup()
 
