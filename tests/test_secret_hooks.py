@@ -363,6 +363,12 @@ def _block_cases(home):
         ("8 Edit docs/credentials-guide.md", "Edit", f"{proj}/docs/credentials-guide.md", 2, 0),
         ("8 Edit .env.example", "Edit", f"{proj}/.env.example", 0, 0),
         ("8 Edit allowlisted realtor_secrets.ts", "Edit", f"{proj}/src/realtor_secrets.ts", 0, 0),
+        # (G2) names the exact set missed but the pre-run hook blocked
+        ("G2 Edit config/prod.env", "Edit", f"{proj}/config/prod.env", 2, 2),
+        ("G2 Write credentials.yml", "Write", f"{proj}/credentials.yml", 2, 2),
+        ("G2 Write config/secrets.yaml", "Write", f"{proj}/config/secrets.yaml", 2, 2),
+        ("G2 Edit src/realtor_secrets.ts", "Edit", f"{proj}/src/realtor_secrets.ts", 0, 0),
+        ("G2 Read config/prod.env", "Read", f"{proj}/config/prod.env", 2, 0),
     ]
 
 
@@ -378,6 +384,56 @@ def test_block_secrets_reads_allowed_and_writes_exact():
             except AssertionError as exc:
                 failures.append(str(exc).splitlines()[0])
         assert not failures, "\n".join(failures)
+    finally:
+        sb.cleanup()
+
+
+# (G2 sweep) ~40 realistic file names. Every one the pre-run hook blocked for
+# Edit/Write must still be blocked now, except the documented allowances: source
+# and doc files that only contain a word like "secrets" or "api-key" in their
+# name, and the env templates. Each allowance carries its reason.
+SWEEP_NAMES = [
+    ".env", ".env.local", ".env.production", ".env.development.local", "prod.env",
+    "config/prod.env", "staging.env", "docker/app.env", ".envrc", ".npmrc",
+    "credentials", "credentials.json", "credentials.yml", "credentials.yaml",
+    "credentials.toml", "aws-credentials.json", "gcp_credentials.yaml",
+    "secrets.json", "secrets.yml", "config/secrets.yaml", "secrets.toml",
+    "secrets.env", "app-secrets.json", "k8s/db-secrets.yaml", "prod_secrets.toml",
+    "server.pem", "certs/tls.key", "master.key", "id_ed25519", "id_rsa",
+    "service-account.json", "service-account-prod.json",
+    ".env.example", ".env.sample", ".env.template",
+    "src/realtor_secrets.ts", "lib/api-key-form.tsx", "src/secrets-panel.tsx",
+    "docs/credentials-guide.md", "src/id_card.tsx", "src/app.tsx", "README.md",
+    "package.json", "config/settings.yaml",
+]
+SWEEP_ALLOWANCES = {
+    "src/realtor_secrets.ts": "source file, word in name only (also sidecar-allowlisted)",
+    "lib/api-key-form.tsx": "source file, word in name only",
+    "src/secrets-panel.tsx": "source file, word in name only",
+    "docs/credentials-guide.md": "doc file, word in name only",
+}
+
+
+def test_block_secrets_sweep_keeps_every_old_block_but_the_allowances():
+    sb = Sandbox()
+    try:
+        proj = os.path.join(sb.home, "project")
+        regressions, table = [], []
+        for rel in SWEEP_NAMES:
+            for tool in ("Edit", "Write"):
+                payload = _file(tool, f"{proj}/{rel}")
+                old_code, _ = run_hook("old", "block-secrets", payload, sb.env)
+                new_code, _ = run_hook("new", "block-secrets", payload, sb.env)
+                table.append((tool, rel, old_code, new_code))
+                if old_code == 2 and new_code != 2 and rel not in SWEEP_ALLOWANCES:
+                    regressions.append(f"{tool} {rel}: old=2 new={new_code}")
+        for rel in SWEEP_ALLOWANCES:
+            for tool in ("Edit", "Write"):
+                code, _ = run_hook("new", "block-secrets", _file(tool, f"{proj}/{rel}"), sb.env)
+                assert code == 0, f"allowance {tool} {rel} now blocked ({code})"
+        RESULTS.append(("G2 sweep: old-blocked names the new hook lets through",
+                        "-", len(regressions)))
+        assert not regressions, "\n".join(regressions)
     finally:
         sb.cleanup()
 

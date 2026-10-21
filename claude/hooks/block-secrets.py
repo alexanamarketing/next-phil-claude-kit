@@ -15,7 +15,10 @@ Blocked for Edit/Write/MultiEdit:
   .envrc .npmrc .pypirc .netrc .git-credentials
   *.pem *.key *.p12 *.pfx *.jks *.keystore
   id_rsa id_ed25519 id_ecdsa id_dsa (exact names)
-  credentials, credentials.json, service-account*.json, secrets.json, secrets.yml/.yaml
+  any name ending in .env (prod.env, staging.env, app.env)
+  credentials, credentials.<anything>, *credentials*.json/.yml/.yaml/.toml
+  secrets.<anything>, *secrets*.json/.yml/.yaml/.toml/.env
+  service-account*.json
   anything under ~/.ssh/ or ~/.aws/, and ~/.claude/.credentials.json
 
 Exit codes: 0=allow, 2=block (stderr fed to Claude)
@@ -35,6 +38,12 @@ EXACT_NAMES = {
 }
 
 KEY_SUFFIXES = ('.pem', '.key', '.p12', '.pfx', '.jks', '.keystore')
+
+# Config-file extensions that turn a name containing "credentials" or "secrets"
+# into a secret store. Source files (realtor_secrets.ts, secrets-panel.tsx) and
+# docs (credentials-guide.md) are not in this list, so they stay writable.
+CREDENTIALS_EXTS = ('.json', '.yml', '.yaml', '.toml')
+SECRETS_EXTS = CREDENTIALS_EXTS + ('.env',)
 
 # Explicit path-substring allowlist (sidecar file, one entry per line, '#' comments).
 # For a file that matches a blocked name but holds no secret value. Keep narrow;
@@ -72,6 +81,12 @@ def blocked_reason(file_path):
         return 'an env file'
     if name in EXACT_NAMES:
         return 'a secret file name'
+    if name.endswith('.env'):
+        return 'an env file'
+    if name.startswith('credentials.') or ('credentials' in name and name.endswith(CREDENTIALS_EXTS)):
+        return 'a credentials file'
+    if name.startswith('secrets.') or ('secrets' in name and name.endswith(SECRETS_EXTS)):
+        return 'a secrets file'
     if name.endswith(KEY_SUFFIXES):
         return 'a key or certificate file'
     if name.startswith('service-account') and name.endswith('.json'):
