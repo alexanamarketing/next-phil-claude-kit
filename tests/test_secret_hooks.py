@@ -21,6 +21,13 @@ secret-guard.py (gitleaks on git commit/push):
       and allows
   (G4) `git commit ... && git push`: old ran only the commit scan, new runs
       both and catches the unpushed token
+  (G3) the push scan reads the PUSHED refspec, not HEAD: a token on branch
+      `other` pushed with `git push origin other:other` while a clean `main`
+      is checked out: old allows (it scanned HEAD only), new blocks. A bare
+      `git push` still scans HEAD (both block). Refspec variants (leading +,
+      value flags -o/--push-option/--repo/--receive-pack, --tags and
+      --follow-tags, `&&` chains, delete refspecs, a ref the parser cannot
+      read) are covered old-vs-new and by a direct parser table.
 block-secrets.py (Read/Edit/Write/MultiEdit on sensitive files):
   (6) Read is always allowed now (Read .env: old blocks, new allows)
   (7) Edit/Write on real secret files is blocked (exact names, not substrings)
@@ -320,6 +327,183 @@ def test_commit_and_push_in_one_command_runs_both_scans():
                 bash("git commit -m page && git push -u origin feat", work), sb.env, old=0, new=2)
     finally:
         sb.cleanup()
+
+
+def _token_on_other_branch(sb):
+    """A repo with a clean, pushed `main` checked out and an unpushed fake
+    token on a local branch `other` (never checked out at push time)."""
+    work = sb.repo()
+    sb.git(work, "checkout", "-q", "-b", "other")
+    sb.write(work, "app.cfg", token_line())
+    sb.commit(work, "token on a branch that is not checked out")
+    sb.git(work, "checkout", "-q", "main")
+    return work
+
+
+def test_push_of_non_checked_out_branch_is_scanned():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        work = _token_on_other_branch(sb)
+        compare("G3 push other:other while clean main is checked out", "secret-guard",
+                bash("git push origin other:other", work), sb.env, old=0, new=2)
+    finally:
+        sb.cleanup()
+
+
+def test_bare_push_still_scans_head():
+    """`git push` with no refspec keeps the HEAD scan (bare_push_still_scans_head)."""
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        work = sb.repo()
+        sb.write(work, "app.cfg", token_line())
+        sb.commit(work, "unpushed token on the checked-out main")
+        compare("G3 bare git push, token on HEAD", "secret-guard",
+                bash("git push", work), sb.env, old=2, new=2)
+        compare("G3 git push origin (remote only), token on HEAD", "secret-guard",
+                bash("git push origin", work), sb.env, old=2, new=2)
+    finally:
+        sb.cleanup()
+
+
+# (G3 variants) each command pushes the token-carrying branch `other` (or a
+# tag on it, or cannot be read and falls back to every local branch and tag)
+# while a clean `main` is checked out: the pre-run hook never saw it.
+G3_BLOCK_CASES = [
+    ("G3 forced +other:other", "git push origin +other:other"),
+    ("G3 bare branch name", "git push origin other"),
+    ("G3 -u origin other", "git push -u origin other"),
+    ("G3 -o value flag before the remote", "git push -o ci.skip origin other"),
+    ("G3 --push-option=value", "git push --push-option=ci.skip origin other:refs/heads/other"),
+    ("G3 --receive-pack value flag", "git push --receive-pack git-receive-pack origin other"),
+    ("G3 -C repo path", "git -C . push origin other:other"),
+    ("G3 && chain, second push carries it", "git push origin main && git push origin other:other"),
+    ("G3 ; chain", "git status ; git push origin other"),
+    ("G3 2>&1 redirect", "git push origin other:other 2>&1 | tail -5"),
+    ("G3 --all", "git push --all origin"),
+    ("G3 unreadable ref falls back to all branches", 'git push origin "$(git rev-parse --abbrev-ref other)"'),
+    ("G3 commit message mentions git push, no push run", 'git commit --allow-empty -m "note: git push later"'),
+]
+
+
+def test_push_refspec_variants_scan_what_is_pushed():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        work = _token_on_other_branch(sb)
+        failures = []
+        for case, command in G3_BLOCK_CASES:
+            try:
+                compare(case, "secret-guard", bash(command, work), sb.env, old=0, new=2)
+            except AssertionError as exc:
+                failures.append(str(exc).splitlines()[0])
+        assert not failures, "\n".join(failures)
+    finally:
+        sb.cleanup()
+
+
+def test_push_tags_scans_tags():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        work = _token_on_other_branch(sb)
+        sb.git(work, "tag", "v1", "other")
+        sb.git(work, "branch", "-D", "other")
+        compare("G3 --tags, token only under a tag", "secret-guard",
+                bash("git push --tags origin", work), sb.env, old=0, new=2)
+        compare("G3 --follow-tags, token only under a tag", "secret-guard",
+                bash("git push --follow-tags origin main", work), sb.env, old=0, new=2)
+        compare("G3 tag <name> form", "secret-guard",
+                bash("git push origin tag v1", work), sb.env, old=0, new=2)
+    finally:
+        sb.cleanup()
+
+
+def test_push_of_clean_or_deleted_refs_stays_allowed():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        work = _token_on_other_branch(sb)
+        sb.git(work, "checkout", "-q", "-b", "clean")
+        sb.write(work, "page.txt", "clean change\n")
+        sb.commit(work, "clean")
+        sb.git(work, "checkout", "-q", "main")
+        for case, command in [
+            ("G3 clean branch pushed by refspec", "git push origin clean:clean"),
+            ("G3 delete refspec :other", "git push origin :other"),
+            ("G3 --delete other", "git push --delete origin other"),
+            ("G3 --repo value is not a ref", "git push --repo=origin"),
+        ]:
+            compare(case, "secret-guard", bash(command, work), sb.env, old=0, new=0)
+    finally:
+        sb.cleanup()
+
+
+def _load_new_guard():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("secret_guard_new", HOOKS["new"]["secret-guard"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# (command, expected push_scan_revs) for the parser alone. BROAD is the
+# fallback when the parser cannot tell what is pushed; None means nothing is
+# pushed (only deletes), so there is nothing to scan.
+def test_push_refspec_parser_table():
+    guard = _load_new_guard()
+    broad = guard.BROAD_REVS
+    cases = [
+        ("git push", ["HEAD"]),
+        ("git push origin", ["HEAD"]),
+        ("git push origin other:other", ["other"]),
+        ("git push origin +other:refs/heads/x", ["other"]),
+        ("git push -u origin feat", ["feat"]),
+        ("git push --set-upstream origin feat", ["feat"]),
+        ("git push origin HEAD:main", ["HEAD"]),
+        ("git push origin a b:c", ["a", "b"]),
+        ("git push -o ci.skip origin feat", ["feat"]),
+        ("git push --push-option ci.skip origin feat", ["feat"]),
+        ("git push --push-option=ci.skip origin feat", ["feat"]),
+        ("git push --repo origin2 origin feat", ["feat"]),
+        ("git push --receive-pack=/x origin feat", ["feat"]),
+        ("git push --receive-pack /x origin feat", ["feat"]),
+        ("git push --exec /x origin feat", ["feat"]),
+        ("git push --tags origin", ["HEAD", "--tags"]),
+        ("git push --follow-tags origin main", ["main", "--tags"]),
+        ("git push origin tag v1", ["refs/tags/v1"]),
+        ("git push --all origin", ["--branches"]),
+        ("git push --branches origin", ["--branches"]),
+        ("git push --mirror origin", ["--branches", "--tags"]),
+        ("git push origin :old", None),
+        ("git push --delete origin old", None),
+        ("git push -d origin old", None),
+        ("git push origin main && git push origin feat", ["main", "feat"]),
+        ("git push origin main; git push origin :gone", ["main"]),
+        ("git push origin main || git push origin feat", ["main", "feat"]),
+        ("git push origin main 2>&1 | tail -3", ["main"]),
+        ("git -C /tmp/r push origin feat", ["feat"]),
+        ("git -c push.default=current push origin feat", ["feat"]),
+        ("GIT_SSH_COMMAND='ssh -i k' git push origin feat", ["feat"]),
+        ("git push -fu origin feat", ["feat"]),
+        ("git push --force-with-lease origin feat", ["feat"]),
+        ("git push --force-with-lease=feat:abc origin feat", ["feat"]),
+        ("git push -- origin feat", ["feat"]),
+        ('git push origin "$(git branch --show-current)"', broad),
+        ("git push origin $BRANCH", broad),
+        ("git push origin 'refs/heads/*:refs/heads/*'", broad),
+        ("git push --some-new-flag origin feat", broad),
+        ('git commit -m "then git push"', broad),
+        ("git push origin 'unterminated", broad),
+    ]
+    failures = []
+    for command, expected in cases:
+        got = guard.push_scan_revs(command)
+        if got != expected:
+            failures.append(f"{command!r}: expected {expected}, got {got}")
+    RESULTS.append(("G3 parser table mismatches", "-", len(failures)))
+    assert not failures, "\n".join(failures)
 
 
 def test_staged_token_still_blocks_a_commit():

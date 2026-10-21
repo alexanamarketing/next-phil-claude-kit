@@ -3,12 +3,26 @@
 
 Runs gitleaks before anything leaves the machine:
   commit -> scan the STAGED diff (`gitleaks git --pre-commit --staged`)
-  push   -> scan only the commits no remote has yet
-            (`--log-opts=HEAD --not --remotes`). Commits already on any
-            remote (main's history, commits pulled in by a rebase) are never
-            rescanned, so a first push or a rebased branch is judged only on
-            what it actually adds.
+  push   -> scan only the commits no remote has yet, on the refs the
+            command actually PUSHES (`<src> --not --remotes`). Commits already
+            on any remote (main's history, commits pulled in by a rebase) are
+            never rescanned, so a first push or a rebased branch is judged only
+            on what it actually adds.
 A command that does both (`git commit ... && git push`) runs both scans.
+
+Which refs a push sends is read from the command itself (push_scan_revs):
+the command is tokenised with shlex and split on `&&`, `||`, `;`, `|` and
+newlines, and every `git ... push` in it is read on its own. `<src>:<dst>`
+scans <src> (a leading `+` is dropped), a bare `<branch>` after the remote
+scans that branch, no refspec scans HEAD, `--all`/`--branches` scan every
+local branch, `--mirror` every branch and tag, `--tags`/`--follow-tags` add
+the tags, `tag <name>` scans that tag, and value flags (`-o`,
+`--push-option`, `--repo`, `--receive-pack`, `--exec`) never count as refs.
+A delete (`:<dst>`, `--delete`, `-d`) sends no commits and scans nothing.
+Whenever the parser cannot tell what is pushed (a shell variable or `$(...)`
+in a ref, a wildcard refspec, an unknown flag, unbalanced quotes, a push
+hidden inside a quoted string), it scans every local branch and tag plus
+HEAD against the remotes, never HEAD alone.
 
 gitleaks runs from the repo ROOT (`git rev-parse --show-toplevel`), because
 it loads `.gitleaks.toml` only from its working directory; a command run
@@ -34,6 +48,7 @@ inherit, so PATH is extended explicitly.
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -103,6 +118,205 @@ def repo_root(cwd):
 
 CONFIG_ERROR = "unable to load gitleaks config"
 
+# What a push scan covers when the command cannot be read for sure.
+BROAD_REVS = ["HEAD", "--branches", "--tags"]
+
+SEPARATORS = {"&&", "||", ";", "|", "&", "\n", "|&", ";;", "(", ")"}
+# git's own options before the subcommand that take a separate value.
+GIT_GLOBAL_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                         "--super-prefix", "--config-env", "--exec-path"}
+# `git push` options that take a separate value (never read as a ref).
+PUSH_VALUE_OPTS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+# `git push` options that take no separate value and do not change what is sent.
+PUSH_FLAG_OPTS = {
+    "-u", "--set-upstream", "-f", "--force", "-q", "--quiet", "-v", "--verbose",
+    "-n", "--dry-run", "--no-verify", "--verify", "--atomic", "--no-atomic",
+    "--porcelain", "--prune", "--thin", "--no-thin", "--progress", "--no-progress",
+    "--force-with-lease", "--no-force-with-lease", "--force-if-includes",
+    "--no-force-if-includes", "--signed", "--no-signed", "-4", "--ipv4",
+    "-6", "--ipv6", "--no-recurse-submodules", "--no-tags", "--no-follow-tags",
+}
+# Short flags that may be bundled (`-fu`); `o` and `d` are handled apart.
+PUSH_SHORT_FLAGS = set("ufqvn46")
+UNSAFE_CHARS = set("$`*?[]{}\\")
+
+
+def _tokens(command):
+    """shlex tokens with shell operators as their own tokens. Raises ValueError
+    on unbalanced quotes."""
+    lex = shlex.shlex(command.replace("\\\n", " "), posix=True,
+                      punctuation_chars="();<>|&\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    return list(lex)
+
+
+def _segments(tokens):
+    """Split tokens into simple commands; drop redirections (`2>&1`, `> f`)."""
+    segments, current, skip_next = [], [], False
+    for tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in SEPARATORS or (tok and set(tok) <= set("&|;\n()")):
+            if current:
+                segments.append(current)
+            current = []
+            continue
+        if tok and set(tok) <= set("<>&"):
+            # A redirection: its fd number (if any) is the previous token and
+            # its target is the next one; neither is a git argument.
+            if current and current[-1].isdigit():
+                current.pop()
+            skip_next = True
+            continue
+        current.append(tok)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _push_args(segment):
+    """The arguments after `push` when this segment runs `git ... push`."""
+    for i, tok in enumerate(segment):
+        if os.path.basename(tok) != "git":
+            continue
+        j = i + 1
+        while j < len(segment):
+            arg = segment[j]
+            if arg in GIT_GLOBAL_VALUE_OPTS:
+                j += 2
+                continue
+            if arg.startswith("-"):
+                j += 1
+                continue
+            break
+        if j < len(segment) and segment[j] == "push":
+            return segment[j + 1:]
+        return None
+    return None
+
+
+def _revs_for_push(args):
+    """Revisions one `git push` sends, [] for a delete-only push, or None when
+    unsure."""
+    positionals, extra, delete, everything = [], [], False, False
+    i, opts_done = 0, False
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if opts_done or not arg.startswith("-") or arg == "-":
+            positionals.append(arg)
+            continue
+        if arg == "--":
+            opts_done = True
+            continue
+        name = arg.split("=", 1)[0]
+        if name in PUSH_VALUE_OPTS:
+            if "=" not in arg:
+                i += 1
+            continue
+        if name in ("--all", "--branches"):
+            everything = True
+            continue
+        if name == "--mirror":
+            everything = True
+            extra.append("--tags")
+            continue
+        if name in ("--tags", "--follow-tags"):
+            extra.append("--tags")
+            continue
+        if name in ("--delete", "-d"):
+            delete = True
+            continue
+        if name in PUSH_FLAG_OPTS:
+            continue
+        if not arg.startswith("--") and len(arg) > 2:
+            # Bundled short flags (`-fu`, `-uo <value>`, `-ovalue`).
+            flags = arg[1:]
+            if "o" in flags:
+                before, after = flags.split("o", 1)
+                if not set(before) <= PUSH_SHORT_FLAGS | {"d"}:
+                    return None
+                delete = delete or "d" in before
+                if not after:
+                    i += 1
+                continue
+            if set(flags) <= PUSH_SHORT_FLAGS | {"d"}:
+                delete = delete or "d" in flags
+                continue
+        return None
+    refspecs = positionals[1:]
+    if delete:
+        return []
+    revs = []
+    if everything:
+        revs.append("--branches")
+    elif not refspecs:
+        revs.append("HEAD")
+    k = 0
+    while k < len(refspecs):
+        spec = refspecs[k]
+        k += 1
+        if spec == "tag":
+            if k >= len(refspecs):
+                return None
+            spec = "refs/tags/" + refspecs[k]
+            k += 1
+        if spec.startswith("+"):
+            spec = spec[1:]
+        src = spec.split(":", 1)[0]
+        if not src:
+            continue  # `:<dst>` deletes <dst>; it sends no commits
+        if src.startswith("-") or UNSAFE_CHARS & set(src):
+            return None
+        revs.append(src)
+    for rev in extra:
+        if rev not in revs:
+            revs.append(rev)
+    return revs
+
+
+def push_scan_revs(command):
+    """The revisions a push scan must cover for this command, scanned as
+    `<revs> --not --remotes`. None means the command pushes nothing that
+    needs scanning (only deletes). Anything unclear returns BROAD_REVS."""
+    try:
+        segments = _segments(_tokens(command))
+    except ValueError:
+        return list(BROAD_REVS)
+    revs, found = [], False
+    for segment in segments:
+        args = _push_args(segment)
+        if args is None:
+            continue
+        found = True
+        pushed = _revs_for_push(args)
+        if pushed is None:
+            return list(BROAD_REVS)
+        for rev in pushed:
+            if rev not in revs:
+                revs.append(rev)
+    if not found:
+        # The text says git ... push, but no git push could be read (it sits
+        # inside quotes, bash -c, ssh ...): scan everything rather than guess.
+        return list(BROAD_REVS)
+    return revs or None
+
+
+def resolvable(revs, cwd):
+    """True when every named ref resolves to a commit in the repo."""
+    for rev in revs:
+        if rev.startswith("--"):
+            continue
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", rev + "^{commit}"],
+            cwd=cwd or None, capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            return False
+    return True
+
 
 def main() -> int:
     try:
@@ -133,7 +347,13 @@ def main() -> int:
     if is_commit:
         scans.append(("commit", ["git", "--pre-commit", "--staged"]))
     if is_push:
-        scans.append(("push", ["git", "--log-opts=HEAD --not --remotes"]))
+        revs = push_scan_revs(command)
+        if revs is not None:
+            if not resolvable(revs, cwd):
+                # A ref git cannot resolve here (a typo, a remote-only name):
+                # git log would error out and the scan would silently pass.
+                revs = list(BROAD_REVS)
+            scans.append(("push", ["git", "--log-opts=" + " ".join(revs + ["--not", "--remotes"])]))
 
     for action, args in scans:
         try:
