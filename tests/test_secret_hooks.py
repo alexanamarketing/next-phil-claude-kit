@@ -502,6 +502,111 @@ def test_joined_push_of_two_repos_scans_each_repo():
         sb.cleanup()
 
 
+# (F5 kit review) each push must be scanned in the repo it really runs in:
+# a `cd` behind a shell keyword or prefix, a subshell that ends, pushd/popd,
+# and --git-dir / GIT_DIR= all change that repo. The pre-run hook found the
+# keyword cases by regex, so those must keep blocking.
+def _two_repo_sandbox(sb, token_in):
+    """Repo A (the session repo) and repo B, both pushed and clean, then one
+    unpushed fake token on main in `token_in` ("A" or "B")."""
+    a = sb.repo()
+    remote_b = os.path.join(sb.dir, "remote-b.git")
+    b = os.path.join(sb.dir, "repo-b")
+    sb.git(sb.dir, "init", "-q", "--bare", remote_b)
+    sb.git(sb.dir, "clone", "-q", remote_b, b)
+    sb.write(b, "README.md", "second repo\n")
+    sb.commit(b, "init")
+    sb.git(b, "push", "-q", "origin", "main")
+    target = a if token_in == "A" else b
+    sb.write(target, "app.cfg", token_line())
+    sb.commit(target, "unpushed token")
+    return a, b
+
+
+def test_push_after_keyword_or_prefixed_cd_is_scanned_in_that_repo():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        a, b = _two_repo_sandbox(sb, "B")
+        failures = []
+        for case, command in [
+            ("F5 if cd B; then push; fi", f"if cd {b}; then git push origin main; fi"),
+            ("F5 {{ cd B && push; }}", f"{{ cd {b} && git push origin main; }}"),
+            ("F5 builtin cd B && push", f"builtin cd {b} && git push origin main"),
+            ("F5 command cd B && push", f"command cd {b} && git push origin main"),
+        ]:
+            try:
+                compare(case, "secret-guard", bash(command, a), sb.env, old=2, new=2)
+            except AssertionError as exc:
+                failures.append(str(exc).splitlines()[0])
+        assert not failures, "\n".join(failures)
+    finally:
+        sb.cleanup()
+
+
+def test_push_after_subshell_pushd_or_git_dir_is_scanned_in_that_repo():
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        a, b = _two_repo_sandbox(sb, "A")
+        failures = []
+        for case, command in [
+            ("F5 subshell cd ends, second push runs in A",
+             f"(cd {b} && git push origin main); git push origin main"),
+            ("F5 pushd B, popd, then push in A",
+             f"pushd {b} && git -C {b} push origin main && popd && git push origin main"),
+        ]:
+            try:
+                compare(case, "secret-guard", bash(command, a), sb.env, old=0, new=2)
+            except AssertionError as exc:
+                failures.append(str(exc).splitlines()[0])
+        for case, command in [
+            ("F5 --git-dir/--work-tree name A from B", f"git --git-dir={a}/.git --work-tree={a} push origin main"),
+            ("F5 GIT_DIR= names A from B", f"GIT_DIR={a}/.git git push origin main"),
+            ("F5 pushd A from B", f"pushd {a} && git push origin main"),
+        ]:
+            try:
+                compare(case, "secret-guard", bash(command, b), sb.env, old=0, new=2)
+            except AssertionError as exc:
+                failures.append(str(exc).splitlines()[0])
+        assert not failures, "\n".join(failures)
+    finally:
+        sb.cleanup()
+
+
+def test_push_scan_plan_table():
+    """push_scan_plan alone: (command, session cwd) -> [(repo, revs)]."""
+    guard = _load_new_guard()
+    base = tempfile.mkdtemp(prefix="plan-table-")
+    try:
+        a, b, sub = (os.path.join(base, n) for n in ("a", "b", os.path.join("b", "sub")))
+        for d in (a, sub):
+            os.makedirs(d)
+        cases = [
+            ("git push origin x", a, [(a, ["x"])]),
+            (f"cd {b} && git push origin x", a, [(b, ["x"])]),
+            (f"if cd {b}; then git push origin x; fi", a, [(b, ["x"])]),
+            (f"{{ cd {b}; git push origin x; }}", a, [(b, ["x"])]),
+            (f"builtin cd {b} && git push origin x", a, [(b, ["x"])]),
+            (f"(cd {b} && git push origin x); git push origin y", a, [(b, ["x"]), (a, ["y"])]),
+            (f"pushd {b} && git push origin x && popd && git push origin y", a, [(b, ["x"]), (a, ["y"])]),
+            (f"git -C {b} -C sub push origin x", a, [(sub, ["x"])]),
+            (f"cd {b} && git -C sub push origin x", a, [(sub, ["x"])]),
+            (f"git --git-dir={b}/.git --work-tree={b} push origin x", a, [(b, ["x"])]),
+            (f"GIT_DIR={b}/.git git push origin x", a, [(b, ["x"])]),
+            (f"git -C {a} push origin x && git -C {b} push origin y", base, [(a, ["x"]), (b, ["y"])]),
+            ("git push origin :gone", a, [(a, None)]),
+        ]
+        bad = []
+        for command, cwd, want in cases:
+            got = guard.push_scan_plan(command, cwd)
+            if got != want:
+                bad.append(f"{command!r}: got {got!r} want {want!r}")
+        assert not bad, "\n".join(bad)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def _load_new_guard():
     import importlib.util
     spec = importlib.util.spec_from_file_location("secret_guard_new", HOOKS["new"]["secret-guard"])
