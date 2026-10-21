@@ -28,7 +28,11 @@ gitleaks runs from the repo ROOT (`git rev-parse --show-toplevel`), because
 it loads `.gitleaks.toml` only from its working directory; a command run
 from a subfolder would otherwise ignore the repo's allowlist.
 
-Exit 2 (block) only when gitleaks reports findings (its exit code 1).
+Exit 2 (block) when gitleaks reports findings (its exit code 1), and when
+a push scan's own `git log` failed (gitleaks prints "stderr is not empty",
+scans 0 commits and exits 0, which would let the push out unscanned). Each
+push is scanned in its own repo, by the commit ids it sends, so a branch
+named like a folder (`tests`) is never an ambiguous name to git log.
 gitleaks also exits 1 when `.gitleaks.toml` is malformed ("unable to load
 gitleaks config"); that is reported as a config error and allowed. Any other
 failure (not installed, not a repo) fails OPEN with a stderr note: a broken
@@ -311,47 +315,144 @@ def _abs_dir(path, base):
     return path
 
 
-def _segment_git_dir(segment, base):
-    """The folder a `git ...` segment runs in: each `-C <dir>` applies on top of
-    the one before (as git does), starting from `base`."""
+# Words that can sit in front of a command without changing which command it
+# is (`if cd B; then`, `{ cd B; }`, `builtin cd B`), and NAME=value prefixes.
+PREFIX_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "{", "}",
+                "!", "builtin", "command", "time", "nohup", "exec"}
+ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _scoped_segments(tokens):
+    """Like _segments, but keeps subshell scope: returns ("seg", tokens),
+    ("open",) and ("close",) items in order, so a `cd` inside `( ... )` ends
+    with the subshell."""
+    items, current, skip_next = [], [], False
+
+    def flush():
+        if current:
+            items.append(("seg", list(current)))
+            current.clear()
+
+    for tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok and set(tok) <= set("<>&") and ("<" in tok or ">" in tok):
+            if current and current[-1].isdigit():
+                current.pop()
+            skip_next = True
+            continue
+        if tok in SEPARATORS or (tok and set(tok) <= set("&|;\n()")):
+            flush()
+            for ch in tok:
+                if ch == "(":
+                    items.append(("open",))
+                elif ch == ")":
+                    items.append(("close",))
+            continue
+        current.append(tok)
+    flush()
+    return items
+
+
+def _dir_arg(args):
+    """The folder argument of cd/pushd (flags skipped), or None."""
+    for a in args:
+        if a.startswith("-") or a.startswith("+"):
+            continue
+        return a
+    return None
+
+
+def _segment_git_dir(segment, base, env=None):
+    """The work tree a `git ...` segment acts on: each `-C <dir>` applies on top
+    of the one before (as git does), starting from `base`; `--work-tree` /
+    GIT_WORK_TREE win, else `--git-dir` / GIT_DIR (its parent when it ends in
+    .git)."""
+    env = env or {}
     for i, tok in enumerate(segment):
         if os.path.basename(tok) != "git":
             continue
         d, j = base, i + 1
+        git_dir, work_tree = env.get("GIT_DIR"), env.get("GIT_WORK_TREE")
         while j < len(segment) and segment[j].startswith("-"):
-            if segment[j] == "-C" and j + 1 < len(segment):
-                d = _abs_dir(segment[j + 1], d)
-            if segment[j] in GIT_GLOBAL_VALUE_OPTS:
-                j += 2
-            else:
-                j += 1
+            arg = segment[j]
+            nxt = segment[j + 1] if j + 1 < len(segment) else None
+            if arg == "-C" and nxt is not None:
+                d = _abs_dir(nxt, d)
+            elif arg.startswith("--git-dir="):
+                git_dir = arg.split("=", 1)[1]
+            elif arg == "--git-dir" and nxt is not None:
+                git_dir = nxt
+            elif arg.startswith("--work-tree="):
+                work_tree = arg.split("=", 1)[1]
+            elif arg == "--work-tree" and nxt is not None:
+                work_tree = nxt
+            j += 2 if arg in GIT_GLOBAL_VALUE_OPTS else 1
+        if work_tree:
+            return _abs_dir(work_tree, d)
+        if git_dir:
+            g = _abs_dir(git_dir, d).rstrip("/")
+            return os.path.dirname(g) if os.path.basename(g) == ".git" else g
         return d
     return base
 
 
 def push_scan_plan(command, session_cwd):
     """[(repo folder, revs)] for every `git push` in the command, each read in
-    its OWN repo (its -C, else the last `cd` before it, else the session cwd),
-    so `git -C A push && git -C B push` scans B too. revs None = a delete-only
-    push. Anything the parser cannot read falls back to one broad scan in the
-    best-effort repo, as before."""
+    its OWN repo: its -C / --git-dir / --work-tree / GIT_DIR=, else the folder
+    the shell is in by then (cd and pushd/popd, also behind if/then/{/builtin/
+    command, with a subshell's cd ending at its `)`), else the session cwd.
+    revs None = a delete-only push. Anything the parser cannot read falls back
+    to one broad scan in the best-effort repo, as before. main() also always
+    scans the repo the older single-repo rule picks, so this plan can only add
+    repos to the scan, never drop that one."""
     fallback = [(resolve_repo_cwd(command, session_cwd), list(BROAD_REVS))]
     try:
-        segments = _segments(_tokens(command))
+        items = _scoped_segments(_tokens(command))
     except ValueError:
         return fallback
     plan, here, found = [], session_cwd, False
-    for segment in segments:
-        if segment and segment[0] == "cd":
-            if len(segment) > 1:
-                here = _abs_dir(segment[1], here)
+    scopes, dirstack = [], []
+    for item in items:
+        if item[0] == "open":
+            scopes.append((here, list(dirstack)))
+            continue
+        if item[0] == "close":
+            if scopes:
+                here, dirstack = scopes.pop()
+            continue
+        segment, env, k = item[1], {}, 0
+        while k < len(segment) and (segment[k] in PREFIX_WORDS or ASSIGN_RE.match(segment[k])):
+            if ASSIGN_RE.match(segment[k]):
+                name, value = segment[k].split("=", 1)
+                env[name] = value
+            k += 1
+        segment = segment[k:]
+        if not segment:
+            continue
+        head = segment[0]
+        if head == "cd":
+            target = _dir_arg(segment[1:])
+            if target and target != "-":
+                here = _abs_dir(target, here)
+            continue
+        if head == "pushd":
+            target = _dir_arg(segment[1:])
+            if target:
+                dirstack.append(here)
+                here = _abs_dir(target, here)
+            continue
+        if head == "popd":
+            if dirstack:
+                here = dirstack.pop()
             continue
         args = _push_args(segment)
         if args is None:
             continue
         found = True
         pushed = _revs_for_push(args)
-        repo = _segment_git_dir(segment, here)
+        repo = _segment_git_dir(segment, here, env)
         plan.append((repo if os.path.isdir(repo) else session_cwd,
                      list(BROAD_REVS) if pushed is None else (pushed or None)))
     return plan if found else fallback
@@ -418,7 +519,15 @@ def main() -> int:
     if is_commit:
         scans.append(("commit", ["git", "--pre-commit", "--staged"], cwd))
     if is_push:
-        for repo, revs in push_scan_plan(command, payload.get("cwd", "")):
+        plan = push_scan_plan(command, payload.get("cwd", ""))
+        # Safety net: also scan the repo the older single-repo rule picks (the
+        # first -C, else the last cd before git, else the session cwd), so a
+        # parser gap in the per-push plan is never worse than before.
+        if any(revs is not None for _, revs in plan):
+            legacy = push_scan_revs(command)
+            if legacy is not None and cwd not in {repo_root(r) for r, _ in plan}:
+                plan.append((cwd, legacy))
+        for repo, revs in plan:
             if revs is None:
                 continue
             root = repo_root(repo)
@@ -443,7 +552,9 @@ def main() -> int:
         if action == "push" and GIT_LOG_ERROR in out:
             print(
                 "secret-guard: the push scan could not read the commits being pushed "
-                f"(git log failed), so the push is blocked rather than sent unscanned:\n{out}",
+                f"(git log failed in {cwd}), so the push is blocked rather than sent unscanned:\n{out}\n"
+                f"Run `git log {args[1][len('--log-opts='):]}` in {cwd} to see git's error, fix it "
+                "(often a broken ref under .git/refs or an old .git/info/grafts file), then push again.",
                 file=sys.stderr,
             )
             return 2
