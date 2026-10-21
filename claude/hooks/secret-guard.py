@@ -361,6 +361,11 @@ def _scoped_segments(tokens):
     return items
 
 
+# `$(git rev-parse --show-toplevel)` (or its backtick form) names the repo the
+# shell is already in, so it is read as that repo's root, never as unknown.
+TOPLEVEL_RE = re.compile(r"^(\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)|`\s*git\s+rev-parse\s+--show-toplevel\s*`)$")
+
+
 def _needs_shell(path):
     """True when a path still holds $ or a backtick after expanding the
     variables this process can see: only the shell can tell where it points."""
@@ -386,13 +391,18 @@ def _segment_git_dir(segment, base, env=None):
     for i, tok in enumerate(segment):
         if os.path.basename(tok) != "git":
             continue
-        d, j = base, i + 1
+        d, j, unreadable = base, i + 1, False
         git_dir, work_tree = env.get("GIT_DIR"), env.get("GIT_WORK_TREE")
         while j < len(segment) and segment[j].startswith("-"):
             arg = segment[j]
             nxt = segment[j + 1] if j + 1 < len(segment) else None
             if arg == "-C" and nxt is not None:
-                d = _abs_dir(nxt, d)
+                if TOPLEVEL_RE.match(nxt):
+                    d = repo_root(d)
+                elif _needs_shell(nxt):
+                    unreadable = True
+                else:
+                    d = _abs_dir(nxt, d)
             elif arg.startswith("--git-dir="):
                 git_dir = arg.split("=", 1)[1]
             elif arg == "--git-dir" and nxt is not None:
@@ -402,7 +412,7 @@ def _segment_git_dir(segment, base, env=None):
             elif arg == "--work-tree" and nxt is not None:
                 work_tree = nxt
             j += 2 if arg in GIT_GLOBAL_VALUE_OPTS else 1
-        if any(v is not None and _needs_shell(v) for v in (git_dir, work_tree)) or _needs_shell(d):
+        if unreadable or any(v is not None and _needs_shell(v) for v in (git_dir, work_tree)):
             return None
         if work_tree:
             return _abs_dir(work_tree, d)
@@ -462,6 +472,13 @@ def push_scan_plan(command, session_cwd, backups=None):
             if target == "-":
                 if previous is not None:
                     here, previous = previous, here
+            elif target and TOPLEVEL_RE.match(target):
+                previous, here = here, repo_root(here)
+            elif target and _needs_shell(target):
+                # Only the shell knows where this goes: scan from the session
+                # cwd, and treat the scope as untrusted so every folder seen so
+                # far is scanned as a backup too.
+                previous, here, untrusted = here, session_cwd, True
             elif target:
                 previous, here = here, _abs_dir(target, here)
                 visited.append(here)
@@ -580,9 +597,9 @@ def main() -> int:
             # Safety net: also scan the repo the older single-repo rule picks
             # (the first -C, else the last cd before git, else the session
             # cwd), plus every folder an untrusted scope may have left the
-            # shell in. Backups run only in a real repo and only for refs that
-            # resolve there, never as a broad scan, so they cannot block a
-            # clean push from a plain folder.
+            # shell in. Backups run only in a real repo, so they cannot block a
+            # clean push from a plain folder; a backup whose refs do not resolve
+            # there gets the broad scan, as the older rule did.
             legacy = push_scan_revs(command)
             if legacy is not None and cwd not in {repo_root(r) for r, _ in plan}:
                 entries.append((cwd, legacy, False))
@@ -594,8 +611,6 @@ def main() -> int:
                 continue
             root = repo_root(repo)
             ids = resolve_revs(revs, root)
-            if ids is None and not primary:
-                continue
             if ids is None:
                 # A ref git cannot resolve here (a typo, a remote-only name):
                 # scan every local branch and tag instead of guessing.
