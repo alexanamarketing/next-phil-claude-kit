@@ -574,6 +574,77 @@ def test_push_after_subshell_pushd_or_git_dir_is_scanned_in_that_repo():
         sb.cleanup()
 
 
+def test_safety_net_never_blocks_a_clean_push_from_a_non_repo_folder():
+    """(F5 kit re-review 6) the older-rule backup scan runs only in a real repo
+    and never widens to a broad scan, so a clean push named by -c/-C,
+    --git-dir or pushd from a plain folder stays allowed."""
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        r = sb.repo()
+        sb.write(r, "page.txt", "clean\n")
+        sb.commit(r, "clean unpushed")
+        plain = os.path.join(sb.dir, "plain")
+        os.makedirs(plain)
+        for case, command in [
+            ("F5 -c then -C from a non-repo", f"git -c core.x=1 -C {r} push origin main"),
+            ("F5 --no-pager -C from a non-repo", f"git --no-pager -C {r} push origin main"),
+            ("F5 --git-dir from a non-repo", f"git --git-dir={r}/.git --work-tree={r} push origin main"),
+            ("F5 GIT_DIR= from a non-repo", f"GIT_DIR={r}/.git git push origin main"),
+            ("F5 pushd from a non-repo", f"pushd {r} && git push origin main && popd"),
+        ]:
+            run_case = bash(command, plain)
+            code, err = run_hook("new", "secret-guard", run_case, sb.env)
+            RESULTS.append((case, None, code))
+            assert code == 0, f"{case}: new={code}\n{_head(err)}"
+    finally:
+        sb.cleanup()
+
+
+def test_process_substitution_or_case_cannot_end_a_subshell_scope_early():
+    """(F5 kit re-review 7) `<(...)` and a `case` pattern's `)` must not close
+    the enclosing subshell, so the push inside it is scanned in B."""
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        a, b = _two_repo_sandbox(sb, "B")
+        failures = []
+        for case, command in [
+            ("F5 <( ) inside a subshell", f"git -C {a} status && (cd {b} && cat <(echo hi) && git push origin main)"),
+            ("F5 case ) inside a subshell", f"git -C {a} status && (cd {b}; case x in x) true;; esac; git push origin main)"),
+        ]:
+            code, err = run_hook("new", "secret-guard", bash(command, a), sb.env)
+            RESULTS.append((case, None, code))
+            if code != 2:
+                failures.append(f"{case}: new={code}")
+        assert not failures, "\n".join(failures)
+    finally:
+        sb.cleanup()
+
+
+def test_push_whose_repo_path_needs_the_shell_is_blocked():
+    """(F5 kit re-review 8) a -C / --git-dir / GIT_DIR value holding $ or a
+    backtick cannot be read without running the shell: block with a clear
+    next step instead of scanning the wrong repo. `cd -` swaps back."""
+    require_gitleaks()
+    sb = Sandbox()
+    try:
+        a, b = _two_repo_sandbox(sb, "B")
+        for case, command in [
+            ("F5 -C with a variable", 'X=B; git -C "$X" push origin main'),
+            ("F5 -C with a command substitution", f'cd {b} && git -C "$(pwd)" push origin main'),
+            ("F5 for loop -C $r", f"for r in {a} {b}; do git -C $r push origin main; done"),
+            ("F5 env GIT_DIR=", f"env GIT_DIR={b}/.git git push origin main"),
+        ]:
+            code, err = run_hook("new", "secret-guard", bash(command, a), sb.env)
+            RESULTS.append((case, None, code))
+            assert code == 2, f"{case}: new={code}\n{_head(err)}"
+        guard = _load_new_guard()
+        assert guard.push_scan_plan(f"cd {b}; cd -; git push origin main", a) == [(a, ["main"])]
+    finally:
+        sb.cleanup()
+
+
 def test_push_scan_plan_table():
     """push_scan_plan alone: (command, session cwd) -> [(repo, revs)]."""
     guard = _load_new_guard()
