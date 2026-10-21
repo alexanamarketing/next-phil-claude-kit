@@ -304,18 +304,89 @@ def push_scan_revs(command):
     return revs or None
 
 
-def resolvable(revs, cwd):
-    """True when every named ref resolves to a commit in the repo."""
+def _abs_dir(path, base):
+    path = os.path.expanduser(os.path.expandvars(path))
+    if not os.path.isabs(path):
+        path = os.path.join(base or ".", path)
+    return path
+
+
+def _segment_git_dir(segment, base):
+    """The folder a `git ...` segment runs in: each `-C <dir>` applies on top of
+    the one before (as git does), starting from `base`."""
+    for i, tok in enumerate(segment):
+        if os.path.basename(tok) != "git":
+            continue
+        d, j = base, i + 1
+        while j < len(segment) and segment[j].startswith("-"):
+            if segment[j] == "-C" and j + 1 < len(segment):
+                d = _abs_dir(segment[j + 1], d)
+            if segment[j] in GIT_GLOBAL_VALUE_OPTS:
+                j += 2
+            else:
+                j += 1
+        return d
+    return base
+
+
+def push_scan_plan(command, session_cwd):
+    """[(repo folder, revs)] for every `git push` in the command, each read in
+    its OWN repo (its -C, else the last `cd` before it, else the session cwd),
+    so `git -C A push && git -C B push` scans B too. revs None = a delete-only
+    push. Anything the parser cannot read falls back to one broad scan in the
+    best-effort repo, as before."""
+    fallback = [(resolve_repo_cwd(command, session_cwd), list(BROAD_REVS))]
+    try:
+        segments = _segments(_tokens(command))
+    except ValueError:
+        return fallback
+    plan, here, found = [], session_cwd, False
+    for segment in segments:
+        if segment and segment[0] == "cd":
+            if len(segment) > 1:
+                here = _abs_dir(segment[1], here)
+            continue
+        args = _push_args(segment)
+        if args is None:
+            continue
+        found = True
+        pushed = _revs_for_push(args)
+        repo = _segment_git_dir(segment, here)
+        plan.append((repo if os.path.isdir(repo) else session_cwd,
+                     list(BROAD_REVS) if pushed is None else (pushed or None)))
+    return plan if found else fallback
+
+
+def resolve_revs(revs, cwd):
+    """Each named ref as the commit id it resolves to, flags kept. A bare name
+    such as `tests` is ambiguous to `git log` when a folder of that name exists,
+    so the scan must never pass the name itself. Returns None when a ref does
+    not resolve here."""
+    out = []
     for rev in revs:
         if rev.startswith("--"):
+            out.append(rev)
             continue
         proc = subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", rev + "^{commit}"],
             cwd=cwd or None, capture_output=True, text=True,
         )
-        if proc.returncode != 0:
-            return False
-    return True
+        sha = proc.stdout.strip()
+        if proc.returncode != 0 or not sha:
+            return None
+        if sha not in out:
+            out.append(sha)
+    return out
+
+
+def resolvable(revs, cwd):
+    """True when every named ref resolves to a commit in the repo."""
+    return resolve_revs(revs, cwd) is not None
+
+
+# gitleaks prints this when the `git log` it runs wrote to stderr (an ambiguous
+# or unknown revision): it then reports 0 commits scanned and exits 0.
+GIT_LOG_ERROR = "stderr is not empty"
 
 
 def main() -> int:
@@ -345,22 +416,37 @@ def main() -> int:
 
     scans = []
     if is_commit:
-        scans.append(("commit", ["git", "--pre-commit", "--staged"]))
+        scans.append(("commit", ["git", "--pre-commit", "--staged"], cwd))
     if is_push:
-        revs = push_scan_revs(command)
-        if revs is not None:
-            if not resolvable(revs, cwd):
+        for repo, revs in push_scan_plan(command, payload.get("cwd", "")):
+            if revs is None:
+                continue
+            root = repo_root(repo)
+            ids = resolve_revs(revs, root)
+            if ids is None:
                 # A ref git cannot resolve here (a typo, a remote-only name):
-                # git log would error out and the scan would silently pass.
-                revs = list(BROAD_REVS)
-            scans.append(("push", ["git", "--log-opts=" + " ".join(revs + ["--not", "--remotes"])]))
+                # scan every local branch and tag instead of guessing.
+                ids = resolve_revs([r for r in BROAD_REVS if r != "HEAD"], root) or []
+                head = resolve_revs(["HEAD"], root)
+                ids = (head or []) + ids
+            scan = ("push", ["git", "--log-opts=" + " ".join(ids + ["--not", "--remotes"])], root)
+            if scan not in scans:
+                scans.append(scan)
 
-    for action, args in scans:
+    for action, args, cwd in scans:
         try:
             code, out = run_gitleaks(args, cwd)
         except Exception as exc:
             print(f"secret-guard: gitleaks failed to run ({exc}), scan skipped", file=sys.stderr)
             continue
+
+        if action == "push" and GIT_LOG_ERROR in out:
+            print(
+                "secret-guard: the push scan could not read the commits being pushed "
+                f"(git log failed), so the push is blocked rather than sent unscanned:\n{out}",
+                file=sys.stderr,
+            )
+            return 2
 
         if CONFIG_ERROR in out:
             print(
