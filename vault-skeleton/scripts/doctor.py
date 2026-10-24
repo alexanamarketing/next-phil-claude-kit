@@ -888,15 +888,15 @@ def check_hooks_smoke_test() -> CheckResult:
 
     results: List[tuple] = []  # (hook_name, passed, detail)
 
-    # block-secrets: exits 2 for a .env path, exits 0 for notes.md
+    # block-secrets: a Write to a .env path exits 2, a Write to notes.md exits 0 (Read is allowed by design)
     if (hooks_dir / "block-secrets.py").exists():
         r1, e1 = _run_hook_subprocess(
             hooks_dir, "block-secrets.py",
-            {"tool_name": "Read", "tool_input": {"file_path": "/tmp/.env"}},
+            {"tool_name": "Write", "tool_input": {"file_path": "/tmp/.env", "content": ""}},
         )
         r2, e2 = _run_hook_subprocess(
             hooks_dir, "block-secrets.py",
-            {"tool_name": "Read", "tool_input": {"file_path": "/tmp/notes.md"}},
+            {"tool_name": "Write", "tool_input": {"file_path": "/tmp/notes.md", "content": ""}},
         )
         if e1 or e2:
             results.append(("block-secrets", False, e1 or e2))

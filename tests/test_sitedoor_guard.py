@@ -57,6 +57,19 @@ def main():
         "security find-generic-password -a phil-sim -g",
         "security find-generic-password -w",
         "security dump-keychain -d",
+        # the tool's own reader, called from Python (gate G11 case K1)
+        'cd ~/.claude/skills/sitedoor/tools && python3 -c "import sitedoor,builtins; '
+        'builtins.print(sitedoor.read_token(\'phil\'))"',
+        "python3 -c 'from sitedoor import read_token; print(read_token(\"phil\"))'",
+        "python3 -c 'import sitedoor; print(sitedoor._SECRETS)'",
+        "python3 -c 'import builtins, sitedoor as s; builtins.print(s.read_token(\"phil\"))'",
+        "python3 -c 'from sitedoor import _SECRETS as x; print(x)'",
+        # a Python argument list with the item name split by + (gate G11 case K2)
+        "['security','find-generic-password','-s','next-phil-'+'edi'+'tor','-w']",
+        "python3 -c \"import subprocess; print(subprocess.check_output("
+        "['security','find-generic-password','-s','next-phil-'+'edi'+'tor','-w']))\"",
+        "python3 -c \"import subprocess; subprocess.run(['security','find-generic-password',"
+        "'-a','phil','-w'])\"",
     ]
     for c in blocked:
         rc, err = run(bash(c))
@@ -65,6 +78,17 @@ def main():
     allowed = [
         "python3 ~/.claude/skills/sitedoor/tools/sitedoor.py plan anthony-test --payload /tmp/p.json",
         "python3 ~/.claude/skills/sitedoor/tools/sitedoor.py whoami --json",
+        "python3 /Users/phil/.claude/skills/sitedoor/tools/sitedoor.py whoami",
+        "python3 ~/.claude/skills/sitedoor/tools/sitedoor.py get victoria-kulszan --sales all",
+        "bash setup.sh",
+        "python3 -c 'print([1, 2] + [3])'",
+        # ordinary commands in the website repo whose names only contain the words (gate G18)
+        'grep -rn "realtor_secrets" convex/',
+        "cat convex/realtor_secrets.ts",
+        "git log --oneline -S HANDOFF_READ_TOKEN",
+        "vercel env ls production | grep SECRETS_READ_TOKEN",
+        "grep -rn SECRETS_GHL_READ_TOKEN src/ scripts/",
+        "npx vitest run convex/realtor_secrets.test.ts",
         "git status",
         "security find-generic-password -s some-other-app -a anthony -w",
         "bash setup.sh --vault-root ~/vault",
