@@ -72,6 +72,11 @@ def main():
     when = body.split("## The order every time", 1)[0]
     check(closes_side_routes(when), "skill body's refusal list closes the side routes")
 
+    token = body.split("## The token", 1)[-1].split("## When the door says no", 1)[0].lower()
+    check("unauthorized" in token and "ask anthony for a new token" in token
+          and "never paste" in token and "conversation" in token,
+          "skill says what to do when the token is not accepted (ask Anthony, Terminal only, never paste into the conversation)")
+
     if FAILS:
         print("%d failed" % len(FAILS))
         sys.exit(1)

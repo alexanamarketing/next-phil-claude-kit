@@ -156,6 +156,11 @@ that names the Keychain item.
 Terminal themselves, then paste the token Anthony sent when it asks. Do not run it
 for them.
 
+If the door answers unauthorized, the token on this computer was replaced, turned
+off or typed wrong. Tell the user to ask Anthony for a new token and to put it in
+with that same Terminal command. Never paste a token into this conversation, and
+never ask the user to.
+
 ## When the door says no
 
 The tool prints the reason. Exit codes: 0 done, 2 the command was wrong, 3 the
