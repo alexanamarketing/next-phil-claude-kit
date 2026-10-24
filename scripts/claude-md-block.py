@@ -9,7 +9,8 @@ ensure: when the file is absent, nothing is created (setup.sh copies the kit's
 CLAUDE.md, which already carries the block). Otherwise every existing sitedoor
 block (any version, anywhere in the file) is removed and the current block is
 appended at the end on its own lines. A second run changes nothing.
-remove: takes every sitedoor block out and leaves the rest of the file as it was.
+remove: takes every sitedoor block out. Only the blank lines right next to a block
+change; every other line of the file is left exactly as it was.
 A start marker without its end marker is refused (exit 1) and the file is left alone.
 Exit codes: 0 ok, 1 refused, 2 usage.
 """
@@ -29,22 +30,24 @@ BODY = (
 BLOCK = START + "\n" + BODY + END + "\n"
 
 START_RE = re.compile(r"<!-- kit-block:sitedoor v\d+ -->")
-BLOCK_RE = re.compile(r"\n*<!-- kit-block:sitedoor v\d+ -->.*?<!-- /kit-block:sitedoor -->[ \t]*\n?", re.S)
+BLOCK_RE = re.compile(r"<!-- kit-block:sitedoor v\d+ -->.*?<!-- /kit-block:sitedoor -->[ \t]*", re.S)
 
 
 def strip_blocks(text):
+    """Cut every sitedoor block out where it sits. Only the newlines right next to a
+    block are touched; every other line of the file stays byte for byte."""
     starts = len(START_RE.findall(text))
     ends = text.count(END)
     if starts != ends:
         return None
-    out = BLOCK_RE.sub("\n", text) if starts else text
-    if starts:
-        # The substitution leaves one newline where each block was; keep the
-        # original spacing of the surrounding text otherwise.
-        out = re.sub(r"\n{3,}", "\n\n", out)
-        if not text.startswith("\n"):
-            out = out.lstrip("\n")
-    return out
+    while True:
+        m = BLOCK_RE.search(text)
+        if not m:
+            return text
+        before = text[:m.start()].rstrip("\n")
+        after = text[m.end():].lstrip("\n")
+        sep = "\n\n" if before and after else ("\n" if before else "")
+        text = before + sep + after
 
 
 def ensure(text):
@@ -56,12 +59,7 @@ def ensure(text):
 
 
 def remove(text):
-    base = strip_blocks(text)
-    if base is None:
-        return None
-    if base != text:
-        base = base.rstrip("\n") + "\n" if base.strip() else ""
-    return base
+    return strip_blocks(text)
 
 
 def main(argv):

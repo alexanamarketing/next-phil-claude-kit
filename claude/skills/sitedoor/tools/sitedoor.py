@@ -28,17 +28,23 @@ has no "op" key. Add --json to any subcommand to print exactly one JSON object.
 
 Token: read inside this process from the macOS Keychain (item next-phil-editor,
 account phil by default), else the Linux secret store, else SITEDOOR_TOKEN (tests
-only). It is never printed, logged, or passed on a command line.
+only). It is never printed, logged, or passed on a command line, any copy of it in
+a door answer is printed as [redacted], and the tool never follows a redirect.
+A token from the Keychain or the secret store goes only to the live door over
+https; SITEDOOR_URL is honoured only with a SITEDOOR_TOKEN test token.
 
 Exit codes: 0 ok, 2 usage, 3 network or certificate problem, 4 refused (by the
 door or by a local check), 5 no token on this machine.
-Environment: SITEDOOR_ACCOUNT (default phil), SITEDOOR_URL (default the live door),
-SITEDOOR_TOKEN (tests only). Standard library only, Python 3.8+.
+Environment: SITEDOOR_ACCOUNT (default phil); SITEDOOR_URL and SITEDOOR_TOKEN are for
+tests only. Standard library only, Python 3.8+.
 """
 import argparse
+import builtins
 import hashlib
+import http.client
 import json
 import os
+import re
 import secrets
 import shutil
 import ssl
@@ -52,6 +58,25 @@ SERVICE = "next-phil-editor"
 DEFAULT_URL = "https://next-snake-35.convex.site/editor/v1"
 DEFAULT_ACCOUNT = "phil"
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
+MIN_PHOTO_BYTES = 1024
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_\-.~+/=]{20,}$")
+
+# Every token value this process has read; print() below replaces each with [redacted].
+_SECRETS = []
+_TOKEN_SOURCE = {"source": None}
+
+
+def _redact(text):
+    for t in _SECRETS:
+        if t:
+            text = text.replace(t, "[redacted]")
+    return text
+
+
+def print(*args, **kwargs):  # noqa: A001  (module-wide redacting print)
+    if _SECRETS:
+        args = tuple(_redact(a if isinstance(a, str) else str(a)) for a in args)
+    builtins.print(*args, **kwargs)
 TIMEOUT = 60
 
 EXIT_OK, EXIT_USAGE, EXIT_NETWORK, EXIT_REFUSED, EXIT_NO_TOKEN = 0, 2, 3, 4, 5
@@ -79,7 +104,13 @@ def local_refusal(reason_code, reason):
 # ------------------------------------------------------------------ request ids
 def canonical_payload(payload):
     """The exact string sent as payload_json and hashed into the request id."""
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    try:
+        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+        text.encode("utf-8")
+    except (ValueError, UnicodeEncodeError) as e:
+        raise local_refusal("payload_not_json", "The payload cannot be sent as JSON (%s). Remove NaN, "
+                                                "Infinity or broken characters and try again." % type(e).__name__)
+    return text
 
 
 def request_id(account, slug, op, payload_json, plan_id):
@@ -102,18 +133,31 @@ def _run_quiet(argv, stdin_text=None):
     return r
 
 
+def _accept(token, source):
+    _SECRETS.append(token)
+    if not TOKEN_RE.match(token):
+        raise Fail(EXIT_NO_TOKEN, {
+            "ok": False, "code": "no_token", "reason_code": "bad_token_format",
+            "reason": ("The editor token on this computer has spaces, line breaks or other characters a "
+                       "token never has, so it was not used. Add it again in Terminal: security "
+                       "add-generic-password -U -s %s -a %s -w" % (SERVICE, account_name())),
+        })
+    _TOKEN_SOURCE["source"] = source
+    return token
+
+
 def read_token(account):
     if shutil.which("security"):
         r = _run_quiet(["security", "find-generic-password", "-s", SERVICE, "-a", account, "-w"])
         if r is not None and r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+            return _accept(r.stdout.strip(), "keychain")
     if shutil.which("secret-tool"):
         r = _run_quiet(["secret-tool", "lookup", "service", SERVICE, "account", account])
         if r is not None and r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+            return _accept(r.stdout.strip(), "keychain")
     env = os.environ.get("SITEDOOR_TOKEN", "").strip()
     if env:
-        return env
+        return _accept(env, "env")
     raise Fail(EXIT_NO_TOKEN, {
         "ok": False, "code": "no_token", "reason_code": "no_token",
         "reason": ("No editor token on this computer for account '%s'. Add it once in Terminal "
@@ -136,6 +180,14 @@ def door_url():
     return _check_url(os.environ.get("SITEDOOR_URL") or DEFAULT_URL, "SITEDOOR_URL")
 
 
+def token_may_go_to(url, source):
+    """A Keychain token goes only to the live door's host over https; a test token anywhere _check_url allows."""
+    if source == "env":
+        return True
+    u, d = urllib.parse.urlparse(url), urllib.parse.urlparse(DEFAULT_URL)
+    return u.scheme == "https" and u.hostname == d.hostname and u.port in (None, 443)
+
+
 def network_code(exc):
     reason = getattr(exc, "reason", exc)
     if isinstance(reason, ssl.SSLCertVerificationError) or isinstance(exc, ssl.SSLCertVerificationError):
@@ -151,22 +203,48 @@ def _network_fail(exc):
     return Fail(EXIT_NETWORK, {"ok": False, "code": code, "reason_code": code, "reason": reason})
 
 
+class _Redirected(Exception):
+    pass
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would re-send the Authorization header to the new address."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise _Redirected(code)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _send(url, data, headers):
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with _OPENER.open(req, timeout=TIMEOUT) as resp:
             return resp.status, resp.read()
+    except _Redirected as e:
+        raise Fail(EXIT_NETWORK, {"ok": False, "code": "bad_response", "reason_code": "redirect",
+                                  "reason": "The editor door answered with a redirect (HTTP %s); the tool does "
+                                            "not follow redirects. Nothing was sent onward." % e})
     except urllib.error.HTTPError as e:
-        return e.code, e.read()
-    except (urllib.error.URLError, OSError, ssl.SSLError) as e:
+        try:
+            return e.code, e.read()
+        except (http.client.HTTPException, OSError) as e2:
+            raise _network_fail(e2)
+    except (urllib.error.URLError, OSError, ssl.SSLError, http.client.HTTPException) as e:
         raise _network_fail(e)
 
 
 def call_door(token, body):
     """POST one request to the door. Returns (status, raw_text, parsed_dict)."""
+    url = door_url()
+    if not token_may_go_to(url, _TOKEN_SOURCE["source"]):
+        raise Fail(EXIT_NETWORK, {"ok": False, "code": "invalid", "reason_code": "url_override_needs_test_token",
+                                  "reason": "SITEDOOR_URL points somewhere other than the live editor door, and "
+                                            "a Keychain token only ever goes to the live door. Unset SITEDOOR_URL."})
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
-    status, raw = _send(door_url(), data, headers)
+    status, raw = _send(url, data, headers)
     text = raw.decode("utf-8", "replace").strip()
     try:
         parsed = json.loads(text)
@@ -228,7 +306,23 @@ def check_photo(path):
     if size > MAX_PHOTO_BYTES:
         raise local_refusal("file_too_large", "The photo is %.1f MB; the limit is 8 MB. Export a smaller "
                                               "copy and try again." % (size / 1048576.0))
+    if size < MIN_PHOTO_BYTES or not _photo_complete(path, kind, size, head):
+        raise local_refusal("bad_image_type", "The photo file looks cut off or damaged. Export it again "
+                                              "as a JPEG and try again.")
     return kind, size
+
+
+def _photo_complete(path, kind, size, head):
+    with open(path, "rb") as f:
+        f.seek(max(0, size - 64))
+        tail = f.read()
+    if kind == "image/jpeg":
+        return b"\xff\xd9" in tail
+    if kind == "image/png":
+        return b"IEND" in tail
+    if kind == "image/webp":
+        return int.from_bytes(head[4:8], "little") + 8 <= size
+    return False
 
 
 # ------------------------------------------------------------------ output
@@ -272,12 +366,55 @@ def cmd_whoami(a, out):
         body.get("account"), body.get("person"), body.get("scope")))
 
 
+def _flat(prefix, value, lines):
+    if isinstance(value, dict):
+        for k in sorted(value):
+            _flat("%s.%s" % (prefix, k) if prefix else k, value[k], lines)
+    else:
+        lines.append("  %s: %s" % (prefix, _short(value, 160)))
+
+
 def cmd_get(a, out):
     _, text, body = call_door(read_token(account_name()), {"op": "get", "slug": a.slug})
     if out.as_json:
         out.json_once(text)
+        return
+    print("Agent %s (token %s, scope %s)" % (body.get("slug", a.slug), body.get("account"), body.get("scope")))
+    lines = []
+    _flat("", body.get("realtor") or {}, lines)
+    print("Record fields:")
+    print("\n".join(lines) if lines else "  (none)")
+    tests = body.get("testimonials") or []
+    print("Testimonials (%d):" % len(tests))
+    for t in tests:
+        tid = t.get("id") or {}
+        print("  %s | content_sha256 %s | rating %s | %s" % (
+            tid.get("reviewer_name", t.get("reviewer_name")), tid.get("content_sha256"), t.get("rating"),
+            _short(t.get("content"), 80)))
+    sales = body.get("sales")
+    if not sales:
+        print("Past sales: no sales record for this agent (past sales live in the homepage layout file in git).")
     else:
-        print(json.dumps(body, ensure_ascii=False, indent=2))
+        entries = list(sales.get("entries") or [])
+        entries.sort(key=lambda e: str(e.get("close_date") or ""), reverse=True)
+        n = len(entries)
+        show = entries if a.sales == "all" else entries[:a.sales]
+        print("Past sales: %d sales on file (source %s, stats %s)." % (
+            n, sales.get("source") or "hand", _short(sales.get("stats"), 120)))
+        if len(show) < n:
+            print("  Showing the %d newest; add --sales all to see every sale and its id." % len(show))
+        for e in show:
+            print("  id %s | %s | %s, %s | %s | photo %s" % (
+                e.get("id"), e.get("close_date") or "no date", e.get("address"), e.get("city"),
+                e.get("price"), "yes" if e.get("photo") else "no"))
+    draft = body.get("draft")
+    if not draft:
+        print("Homepage draft: none.")
+    else:
+        lines = []
+        _flat("", draft, lines)
+        print("Homepage draft fields:")
+        print("\n".join(lines))
 
 
 def cmd_history(a, out):
@@ -353,9 +490,6 @@ def cmd_apply(a, out):
 
 
 def cmd_revert(a, out):
-    if not (a.request or a.write):
-        raise Fail(EXIT_USAGE, {"ok": False, "code": "invalid", "reason_code": "usage",
-                                "reason": "revert needs --request <id> or --write <id>"})
     token = read_token(account_name())
     if not a.apply:
         _, text, body = call_door(token, {"op": "history", "slug": a.slug, "limit": 50})
@@ -363,6 +497,11 @@ def cmd_revert(a, out):
                 if (a.request and r.get("request_id") == a.request) or (a.write and r.get("write_id") == a.write)]
         if out.as_json:
             out.json_once({"ok": True, "dry_run": True, "would_revert": rows})
+            return
+        if not rows:
+            print("That change is not in the last 50 changes for %s. --apply will still look it up by "
+                  "its id and undo it if nothing changed it since." % a.slug)
+            print("Nothing written. Add --apply to undo it.")
             return
         print("Would undo %d logged change(s) on %s:" % (len(rows), a.slug))
         for r in rows:
@@ -433,10 +572,11 @@ def cmd_enroll(a, out):
             raise local_refusal("token_exists", "A token for account '%s' is already in the Keychain. "
                                                 "Use enroll --replace only if Anthony asked for a new one." % account)
     tok = secrets.token_urlsafe(32)
+    _SECRETS.append(tok)
     if has_security:
-        # -w as the LAST argument makes security prompt for the value; it is fed on stdin, never argv.
-        r = _run_quiet(["security", "add-generic-password", "-U", "-s", SERVICE, "-a", account, "-w"],
-                       stdin_text=tok + "\n" + tok + "\n")
+        # security -i reads its command from stdin, so the token never reaches argv or a terminal prompt.
+        r = _run_quiet(["security", "-i"],
+                       stdin_text="add-generic-password -U -s %s -a %s -w %s\n" % (SERVICE, account, tok))
     else:
         r = _run_quiet(["secret-tool", "store", "--label", "%s %s" % (SERVICE, account),
                         "service", SERVICE, "account", account], stdin_text=tok)
@@ -468,6 +608,18 @@ def read_token_keychain_only(account):
 
 
 # ------------------------------------------------------------------ main
+def _sales_count(v):
+    if v == "all":
+        return "all"
+    try:
+        n = int(v)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise argparse.ArgumentTypeError("--sales takes a number or all")
+    return n
+
+
 def _limit(v):
     try:
         n = int(v)
@@ -499,6 +651,8 @@ def build_parser():
     add("whoami", "show which token this computer holds")
     sp = add("get", "show an agent's editable fields")
     sp.add_argument("slug")
+    sp.add_argument("--sales", type=_sales_count, default=20, metavar="N|all",
+                    help="how many of the newest past sales to list (default 20, or all)")
     sp = add("history", "list recent changes for an agent")
     sp.add_argument("slug")
     sp.add_argument("--limit", type=_limit, default=20, help="1 to 50, default 20")
@@ -514,8 +668,9 @@ def build_parser():
     sp.add_argument("--apply", action="store_true", help="actually write")
     sp = add("revert", "undo a change (needs --apply)")
     sp.add_argument("slug")
-    sp.add_argument("--request", metavar="REQUEST_ID")
-    sp.add_argument("--write", metavar="WRITE_ID")
+    which = sp.add_mutually_exclusive_group(required=True)
+    which.add_argument("--request", metavar="REQUEST_ID")
+    which.add_argument("--write", metavar="WRITE_ID")
     sp.add_argument("--apply", action="store_true")
     sp = add("photo", "check a photo, and upload it with --apply")
     sp.add_argument("slug")
@@ -552,6 +707,14 @@ def main(argv=None):
         return f.exit_code
     except KeyboardInterrupt:
         return 130
+    except Exception as e:  # never a traceback: it could carry request details
+        body = {"ok": False, "code": "error", "reason_code": type(e).__name__,
+                "reason": "sitedoor stopped on an unexpected %s." % type(e).__name__}
+        if out.as_json:
+            out.json_once(body)
+        else:
+            print("sitedoor: %s" % body["reason"], file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

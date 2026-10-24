@@ -33,7 +33,10 @@ Page layouts and code still go through git the way the user already works.
 ## The order every time
 
 First run `sitedoor.py get <slug>` to see the agent's current values. The slug is
-the agent's name in the site address, for example `victoria-kulszan`.
+the agent's name in the site address, for example `victoria-kulszan`. It lists the
+record fields, the testimonials with their ids, the 20 newest past sales with their
+ids, and the homepage draft. To remove an older sale, run
+`sitedoor.py get <slug> --sales all` to find its id.
 
 Then write the change into a payload file (below) and run
 `sitedoor.py plan <slug> --payload <file>`. Show the user the planned change line by
@@ -47,18 +50,23 @@ and plan again; never apply a plan the user has not seen. Running `apply` withou
 
 Tell the user what was written and the request id, so it can be undone later.
 
+If the door answers `stale_plan`, the record changed after the plan was made. Run
+`plan` again, show the user the new plan, and ask again before writing.
+
 ## Undo
 
 `sitedoor.py history <slug>` lists recent changes, newest first, with their
 request ids and write ids. `sitedoor.py revert <slug> --request <request_id>` shows
 what would be undone; add `--apply` after the user says yes. `--write <write_id>`
-undoes one field instead of a whole change. If the door answers `drift`, someone
+undoes one field instead of a whole change. Give one of the two, not both. If the
+door answers `drift`, someone
 changed that field again since; show the user and ask before doing anything else.
 
 ## Payload files
 
 A payload file is one JSON object. Its `op` key says what kind of change it is; the
-other keys are the change. Write it to a temporary file and pass it with `--payload`.
+other keys are the change. Write it to a file under `/tmp` (never inside a repo or
+the vault, where it would get committed) and pass it with `--payload`.
 
 Set fields on the agent's record (`realtor_set`):
 
