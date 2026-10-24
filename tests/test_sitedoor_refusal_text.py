@@ -98,6 +98,10 @@ def main():
           and "never paste" in token and "conversation" in token,
           "skill says what to do when the token is not accepted (ask Anthony, Terminal only, never paste into the conversation)")
 
+    sp = skill.lower()
+    check("stale_plan" in sp and "payload file changed" in sp,
+          "skill says stale_plan also means the payload file changed since the plan")
+
     if FAILS:
         print("%d failed" % len(FAILS))
         sys.exit(1)

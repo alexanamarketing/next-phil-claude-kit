@@ -58,8 +58,9 @@ and plan again; never apply a plan the user has not seen. Running `apply` withou
 
 Tell the user what was written and the request id, so it can be undone later.
 
-If the door answers `stale_plan`, the record changed after the plan was made. Run
-`plan` again, show the user the new plan, and ask again before writing.
+If the door answers `stale_plan`, the record changed after the plan was made, or the
+payload file changed since the plan. Run `plan` again with the payload you mean to
+write, show the user the new plan, and ask again before writing.
 
 ## Undo
 
