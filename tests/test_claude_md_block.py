@@ -124,6 +124,18 @@ def main():
     rc, out = run(p, "remove")
     check(rc != 0 and read(p) == broken, "remove also refuses broken markers")
 
+    # lines outside the block are never touched, blank-line runs included (review K11)
+    fenced = "# Rules\n\n```\nline one\n\n\n\nline two\n```\n\n\n\n## After\n- x\n"
+    write(p, fenced)
+    rc1, _ = run(p, "ensure")
+    rc2, _ = run(p, "ensure")
+    rc3, _ = run(p, "remove")
+    check(rc1 == rc2 == rc3 == 0 and read(p) == fenced, "ensure, ensure, remove leaves a fenced blank-line run intact")
+    write(p, "# A\n\n\n\n" + START + "\nold\n" + END + "\n\n## B\n```\nx\n\n\n\ny\n```\n")
+    rc, _ = run(p, "ensure")
+    s = read(p)
+    check(rc == 0 and "```\nx\n\n\n\ny\n```\n" in s and s.count(START) == 1, "a block move keeps distant blank lines")
+
     # usage
     rc, out = run(p, "bogus")
     check(rc == 2, "an unknown action is a usage error")

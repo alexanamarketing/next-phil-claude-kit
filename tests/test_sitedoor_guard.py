@@ -44,6 +44,19 @@ def main():
         "python3 ~/.claude/skills/sitedoor/tools/sitedoor.py whoami; echo next-phil-editor",
         "grep -r NEXT-PHIL-EDITOR ~/Library",
         "secret-tool lookup service next-phil-editor account phil",
+        # quoting and splitting bypasses (review K1)
+        'security find-generic-password -s next-phil-"editor" -a phil -w',
+        "security find-generic-password -s next-phil-ed''itor -a phil -w",
+        "security find-generic-password -s next-phil-\\editor -a phil -w",
+        "S=next-phil; security find-generic-password -s $S-editor -a phil -w",
+        "S=next-phil; security find-generic-password -s ${S}-editor -a phil -w",
+        "security find-generic-password -s $'next-phil-\\x65ditor' -a phil -w",
+        "security find-generic-password -s $'next-phil-\\145ditor' -a phil -w",
+        # lookups that never name the service
+        "security find-generic-password -a phil -w",
+        "security find-generic-password -a phil-sim -g",
+        "security find-generic-password -w",
+        "security dump-keychain -d",
     ]
     for c in blocked:
         rc, err = run(bash(c))
@@ -53,6 +66,9 @@ def main():
         "python3 ~/.claude/skills/sitedoor/tools/sitedoor.py plan anthony-test --payload /tmp/p.json",
         "python3 ~/.claude/skills/sitedoor/tools/sitedoor.py whoami --json",
         "git status",
+        "security find-generic-password -s some-other-app -a anthony -w",
+        "bash setup.sh --vault-root ~/vault",
+        "grep -n editor README.md",
     ]
     for c in allowed:
         rc, err = run(bash(c))

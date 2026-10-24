@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import secrets
+import socket
 import shutil
 import ssl
 import stat
@@ -103,7 +104,7 @@ def default_responder(stub):
         if op == "whoami":
             return 200, j({"ok": True, "account": "phil-sim", "person": "Test Phil", "scope": "test_only"})
         if op == "get":
-            return 200, j({"ok": True, "slug": req.get("slug"), "fields": {"title": "Realtor"}})
+            return 200, j(get_body(req.get("slug")))
         if op == "plan":
             return 200, j({"ok": True, "action": req.get("action"), "slug": req.get("slug"), "plan_id": "a" * 64,
                            "request_id": "b" * 64, "changed": 1, "skipped_duplicate": [],
@@ -125,6 +126,45 @@ def default_responder(stub):
                                   "0f8fad5b-d9cb-469f-a165-70867728950e"})
         return 400, j({"ok": False, "code": "invalid", "reason_code": "unknown_op", "reason": "unknown op"})
     return respond
+
+
+def get_body(slug, n_sales=30):
+    entries = [{"id": "MLS%04d" % i, "address": "%d Test St" % i, "city": "Phoenix", "zip": "85001",
+                "price": 300000 + i, "side": "seller", "close_date": "2025-%02d-%02d" % (1 + i % 12, 1 + i % 28),
+                "photo": None} for i in range(n_sales)]
+    return {"ok": True, "account": "phil-sim", "scope": "test_only", "slug": slug,
+            "realtor": {"title": "Realtor", "bio": "Bio text " * 5, "license_number": "SA123"},
+            "testimonials": [{"id": {"reviewer_name": "Dana R.", "content_sha256": "c" * 64},
+                              "reviewer_name": "Dana R.", "content": "Great to work with", "rating": 5}],
+            "sales": {"stats": {"count": n_sales}, "source": None, "entries": entries},
+            "draft": {"seo": {"title": "Seo Title Here", "description": "Seo desc"},
+                      "hero": {"headline": "Hero Headline Here"}}}
+
+
+def raw_server(payload):
+    """A one-shot TCP server that answers every connection with raw bytes, then closes."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+
+    def loop():
+        while True:
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                return
+            try:
+                c.settimeout(5)
+                c.recv(65536)
+                c.sendall(payload)
+            except OSError:
+                pass
+            finally:
+                c.close()
+
+    threading.Thread(target=loop, daemon=True).start()
+    return srv, "http://127.0.0.1:%d/editor/v1" % srv.getsockname()[1]
 
 
 # ---------------------------------------------------------------- harness
@@ -224,6 +264,16 @@ def main():
     stub.requests.clear()
     rc, out, err = go(["get", "anthony-test"])
     check(rc == 0 and stub.bodies() == [{"op": "get", "slug": "anthony-test"}], "get sends op get with slug")
+    shown = [i for i in range(30) if "MLS%04d" % i in out]
+    check(len(shown) == 20, "get prints the 20 newest sales by default (%d shown)" % len(shown))
+    check("30 sales" in out and "--sales all" in out, "get says how many sales there are and how to see all")
+    check("Dana R." in out and "c" * 64 in out, "get prints testimonials with their ids")
+    check("Seo Title Here" in out and "Hero Headline Here" in out and "SA123" in out,
+          "get prints realtor fields and the draft's seo and hero text")
+    rc, out, err = go(["get", "anthony-test", "--sales", "all"])
+    check(rc == 0 and all("MLS%04d" % i in out for i in range(30)), "get --sales all prints every sale")
+    rc, out, err = go(["get", "anthony-test", "--json"])
+    check(rc == 0 and one_json(out) == get_body("anthony-test"), "get --json is the door body verbatim")
 
     # plan sends op plan with write_op and payload_json (canonical string)
     pf = write_json(tmp, "p.json", {"op": "realtor_set", "set": {"title": "Broker"}})
@@ -322,6 +372,11 @@ def main():
           "revert --write --apply sends write_id")
     rc, out, err = go(["revert", "anthony-test", "--apply"])
     check(rc == 2, "revert needs --request or --write")
+    stub.requests.clear()
+    rc, out, err = go(["revert", "anthony-test", "--request", "r1", "--write", "w1", "--apply"])
+    check(rc == 2 and stub.requests == [], "revert with both --request and --write is a usage error")
+    rc, out, err = go(["revert", "anthony-test", "--write", "w-old"])
+    check(rc == 0 and "last 50" in out, "revert dry run on an older write says --apply still finds it")
 
     # door refusal: exit 4, human prints code and reason; --json prints the body
     refusal = {"ok": False, "code": "refused", "reason_code": "scope", "reason": "this token is for test agents only"}
@@ -339,7 +394,57 @@ def main():
     rc, out, err = go(["whoami", "--json"])
     obj = one_json(out)
     check(rc == 3 and obj is not None and obj.get("ok") is False, "non-JSON answer exits 3 with one JSON object")
+    # a door body that echoes the token is redacted on every path
+    stub.responder = lambda p, h, body: (401, j({"ok": False, "code": "unauthorized", "reason_code": "x",
+                                                 "reason": "bad token " + tok}))
+    rc, out, err = go(["whoami"])
+    check(rc == 4 and tok not in out + err and "[redacted]" in out + err, "an echoed token is redacted (text)")
+    rc, out, err = go(["whoami", "--json"])
+    check(rc == 4 and tok not in out and "[redacted]" in out, "an echoed token is redacted (--json)")
+    stub.responder = lambda p, h, body: (200, j({"ok": True, "account": "a", "person": tok, "scope": "s"}))
+    rc, out, err = go(["whoami"])
+    check(tok not in out + err, "an echoed token in a success body is redacted")
+    # redirects are refused; the token never follows one
+    stub2 = Stub()
+    stub2.responder = default_responder(stub2)
+    stub.responder = lambda p, h, body: (302, b"{}")
+    orig_handler = stub.server.RequestHandlerClass
+
+    class Redir(orig_handler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(n)
+            self.send_response(302)
+            self.send_header("Location", stub2.url)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    stub.server.RequestHandlerClass = Redir
+    rc, out, err = go(["whoami", "--json"])
+    obj = one_json(out)
+    check(rc == 3 and obj and obj.get("ok") is False and stub2.requests == [],
+          "a redirect is refused with exit 3 and nothing reaches the new address")
+    stub.server.RequestHandlerClass = orig_handler
+    stub2.server.shutdown()
     stub.responder = default_responder(stub)
+    # malformed status line and a short body: exit 3, one JSON object, no traceback
+    srv, bad_url = raw_server(b"garbage not http\r\n\r\n")
+    rc, out, err = go(["whoami", "--json"], url=bad_url)
+    obj = one_json(out)
+    check(rc == 3 and obj and obj.get("ok") is False and "Traceback" not in err, "a bad status line exits 3")
+    srv.close()
+    srv, short_url = raw_server(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 500\r\n\r\n{}")
+    rc, out, err = go(["whoami", "--json"], url=short_url)
+    obj = one_json(out)
+    check(rc == 3 and obj and obj.get("ok") is False and "Traceback" not in err, "a short body exits 3")
+    srv.close()
+    # a token with a newline or space is refused before use, never printed
+    bad = "abcdefghij" + "\n" + "klmnopqrstuvwxyz0123"
+    stub.requests.clear()
+    rc, out, err = go(["whoami", "--json"], token=bad)
+    obj = one_json(out)
+    check(rc == 5 and obj and obj.get("reason_code") == "bad_token_format" and stub.requests == []
+          and "klmnopqrst" not in out + err and "Traceback" not in err, "a malformed token is refused unprinted")
 
     # local refusals (--json): SVG and oversize photos never reach the door
     svg = os.path.join(tmp, "x.svg")
@@ -362,7 +467,7 @@ def main():
 
     # photo dry run and apply
     jpg = os.path.join(tmp, "p.jpg")
-    jbytes = b"\xff\xd8\xff\xe0" + os.urandom(2000)
+    jbytes = b"\xff\xd8\xff\xe0" + os.urandom(2000) + b"\xff\xd9"
     with open(jpg, "wb") as f:
         f.write(jbytes)
     stub.requests.clear()
@@ -370,13 +475,23 @@ def main():
     check(rc == 0 and stub.requests == [] and "image/jpeg" in out, "photo dry run checks locally and sends nothing")
     png = os.path.join(tmp, "p.png")
     with open(png, "wb") as f:
-        f.write(b"\x89PNG\r\n\x1a\n" + os.urandom(100))
+        f.write(b"\x89PNG\r\n\x1a\n" + os.urandom(2000) + b"\x00\x00\x00\x00IEND\xaeB`\x82")
     webp = os.path.join(tmp, "p.webp")
     with open(webp, "wb") as f:
-        f.write(b"RIFF\x10\x00\x00\x00WEBPVP8 " + os.urandom(100))
+        body = b"WEBPVP8 " + os.urandom(2000)
+        f.write(b"RIFF" + len(body).to_bytes(4, "little") + body)
     rc1, o1, _ = go(["photo", "anthony-test", png])
     rc2, o2, _ = go(["photo", "anthony-test", webp])
     check(rc1 == 0 and "image/png" in o1 and rc2 == 0 and "image/webp" in o2, "png and webp sniffed")
+    for name, data in (("tiny.jpg", b"\xff\xd8\xff"), ("cut.jpg", b"\xff\xd8\xff\xe0" + os.urandom(3000)),
+                       ("cut.png", b"\x89PNG\r\n\x1a\n" + os.urandom(3000)),
+                       ("cut.webp", b"RIFF" + (9000).to_bytes(4, "little") + b"WEBPVP8 " + os.urandom(2000))):
+        fp = os.path.join(tmp, name)
+        with open(fp, "wb") as f:
+            f.write(data)
+        rc, out, err = go(["photo", "anthony-test", fp, "--json"])
+        obj = one_json(out)
+        check(rc == 4 and obj and obj.get("reason_code") == "bad_image_type", "a cut-off photo is refused: " + name)
     stub.requests.clear()
     rc, out, err = go(["photo", "anthony-test", jpg, "--apply"])
     paths = [r["path"] for r in stub.requests]
@@ -400,6 +515,21 @@ def main():
     check(rc == 4 and obj and obj.get("reason_code") == "missing_op", "payload without op is a local refusal")
     rc, out, err = go(["plan", "anthony-test", "--payload", nop, "--op", "realtor_set"])
     check(rc == 0, "--op supplies the write op")
+    nanf = os.path.join(tmp, "nan.json")
+    with open(nanf, "w") as f:
+        f.write('{"op": "realtor_set", "set": {"title": NaN}}')
+    stub.requests.clear()
+    rc, out, err = go(["plan", "anthony-test", "--payload", nanf, "--json"])
+    obj = one_json(out)
+    check(rc == 4 and obj and obj.get("reason_code") == "payload_not_json" and stub.requests == [],
+          "NaN in a payload is a local refusal")
+    surf = os.path.join(tmp, "sur.json")
+    with open(surf, "w") as f:
+        f.write('{"op": "realtor_set", "set": {"title": "a\\ud800b"}}')
+    rc, out, err = go(["plan", "anthony-test", "--payload", surf, "--json"])
+    obj = one_json(out)
+    check(rc == 4 and obj and obj.get("reason_code") == "payload_not_json" and "Traceback" not in err,
+          "a lone surrogate in a payload is a local refusal")
 
     # network errors: exit 3
     rc, out, err = go(["whoami"], url="http://127.0.0.1:9/editor/v1")
@@ -419,14 +549,21 @@ def main():
     # ---------------- token sources and order
     shim = os.path.join(tmp, "shim")
     sec_tok, st_tok = fake_token(), fake_token()
-    # security present with an item: used first, even with env set
+    # security present with an item: used first, even with env set. A Keychain token
+    # never goes to a non-default door address, so the stub gets nothing (exit 3).
     make_shims(shim, security='[ "$1" = find-generic-password ] && { echo "%s"; exit 0; }; exit 44' % sec_tok,
                secret_tool='echo "%s"' % st_tok)
     stub.requests.clear()
-    rc, out, err = go(["whoami"], shims=shim, token=tok)
-    check(rc == 0 and stub.requests[-1]["headers"].get("Authorization") == "Bearer " + sec_tok,
-          "Keychain (security) is read first")
-    seen.append((out, err))
+    rc, out, err = go(["whoami", "--json"], shims=shim, token=tok)
+    obj = one_json(out)
+    check(rc == 3 and stub.requests == [] and obj and obj.get("reason_code") == "url_override_needs_test_token",
+          "Keychain (security) is read first and its token is not sent to a non-default address")
+    check(mod.token_may_go_to(mod.DEFAULT_URL, "keychain"), "a Keychain token may go to the default door")
+    check(not mod.token_may_go_to("https://example.com/editor/v1", "keychain"),
+          "a Keychain token may not go to another https host")
+    check(not mod.token_may_go_to("https://next-snake-35.convex.site.example.com/editor/v1", "keychain"),
+          "a look-alike host is refused")
+    check(mod.token_may_go_to(stub.url, "env"), "the test token may go to a local stub")
     argv = open(os.path.join(shim, "argv.log")).read()
     check("-s %s" % SERVICE in argv and "-a phil" in argv and "-w" in argv,
           "security is asked for service next-phil-editor, account phil")
@@ -438,9 +575,10 @@ def main():
     # security has no item: fall to secret-tool
     make_shims(shim, security="exit 44", secret_tool='[ "$1" = lookup ] && { echo "%s"; exit 0; }; exit 1' % st_tok)
     stub.requests.clear()
-    rc, out, err = go(["whoami"], shims=shim, token=tok)
-    check(rc == 0 and stub.requests[-1]["headers"].get("Authorization") == "Bearer " + st_tok,
-          "secret-tool is read when the Keychain has no item")
+    rc, out, err = go(["whoami", "--json"], shims=shim, token=tok)
+    obj = one_json(out)
+    check(rc == 3 and stub.requests == [] and obj and obj.get("reason_code") == "url_override_needs_test_token",
+          "secret-tool is read when the Keychain has no item, and held to the default door")
     argv = open(os.path.join(shim, "argv.log")).read()
     check("lookup service %s account phil" % SERVICE in argv, "secret-tool lookup uses service and account")
     # neither has it: env
@@ -467,8 +605,9 @@ def main():
     store = os.path.join(shim, "stored.txt")
     make_shims(shim,
                security=('case "$1" in find-generic-password) [ -s "%s" ] && { IFS= read -r t < "%s"; printf "%%s\\n" "$t"; exit 0; }; exit 44;; '
-                         'add-generic-password) IFS= read -r a; IFS= read -r b; [ "$a" = "$b" ] || exit 9; '
-                         'printf %%s "$a" > "%s"; exit 0;; esac; exit 1') % (store, store, store),
+                         '-i) IFS= read -r line; printf "%%s" "$line" > "%s.line"; set -- $line; '
+                         '[ "$1 $2 $3 $4 $5 $6 $7" = "add-generic-password -U -s next-phil-editor -a phil -w" ] || exit 9; '
+                         'printf %%s "$8" > "%s"; exit 0;; esac; exit 1') % (store, store, store, store),
                secret_tool=None)
     open(os.path.join(shim, "argv.log"), "w").close()
     rc, out, err = go(["enroll"], shims=shim, token=None)
@@ -477,7 +616,10 @@ def main():
     check(stored and hashlib.sha256(stored.encode()).hexdigest() in out, "enroll prints the token's sha256")
     check(stored and stored not in out and stored not in err, "enroll never prints the token")
     argv = open(os.path.join(shim, "argv.log")).read()
-    check("add-generic-password -U -s %s -a phil -w" % SERVICE in argv, "enroll calls security add-generic-password -U ... -w")
+    check(argv.strip().endswith("security -i") or " -i\n" in argv, "enroll runs security -i")
+    line = open(store + ".line").read() if os.path.exists(store + ".line") else ""
+    check(line == "add-generic-password -U -s %s -a phil -w %s" % (SERVICE, stored),
+          "enroll sends one add-generic-password -U ... -w line on stdin")
     check(stored and stored not in argv, "enroll never puts the token in argv")
     seen.append((out, err))
     # a second enroll refuses to overwrite without --replace
