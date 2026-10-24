@@ -25,7 +25,7 @@ BODY = (
     "\n"
     "- A change to an agent's record on the website database (bio, title, testimonials, past sales, service areas, social links, license number, office address, headshot, and the homepage draft's SEO and hero text) goes through the `sitedoor` skill, using your own editor token from the Keychain.\n"
     "- It shows the change first and writes only after you say yes. Every change is logged in the MLS log and can be undone.\n"
-    "- Before applying a change, say where it will show: record fields on the agent's portfolio page in about five minutes, testimonials on that agent's listing pages, a past sale on the homepage only with a photo and in the top 24 by price, and homepage SEO and hero text in the draft only, live with Anthony's next publish.\n"
+    "- Before applying a change, say where it will show: record fields on the agent's portfolio page in about five minutes, a new testimonial first on that agent's listing pages, a past sale on the homepage only with a photo and in the top 24 by price, and homepage SEO and hero text in the draft only, live with Anthony's next publish.\n"
     "- Domains, phone numbers, email addresses, GoHighLevel ids or settings, publishing or unpublishing a site, tracking pixels, open houses, listings, and deleting an agent, a site or a whole record are not done this way (removing one testimonial or past sale is fine). Say so plainly and that Anthony handles them. Do not offer a deploy key, `npx convex` or a change to the door's code as another way to do it, and never use a deploy key or `npx convex` for agent data.\n"
 )
 BLOCK = START + "\n" + BODY + END + "\n"

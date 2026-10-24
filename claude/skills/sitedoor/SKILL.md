@@ -89,12 +89,18 @@ Fields: `bio`, `title`, `name_first`, `display_short_name`, `area`, `service_are
 `.twitter` (https links on that network; an empty string removes one). Text cannot
 contain `<` or `>`.
 
+`display_short_name` is the agent's name in the texts leads receive (for example
+"You're on the list! Victoria with NEXT HomeSmart here"), not on the website. It
+takes a plain name only: no links, web addresses or extra words. Say so to the user
+when they change it.
+
 Add a testimonial (`testimonial_add`, one per change):
 
     {"op": "testimonial_add", "reviewer_name": "Dana R.", "content": "...", "rating": 5}
 
 `rating` is a whole number from 1 to 5. `reviewer_role` (for example "Seller") and
-`source` are optional. The same testimonial twice is skipped, not doubled.
+`source` are optional. The same testimonial twice is skipped, not doubled. A new
+testimonial goes first in the agent's list.
 
 Remove one (`testimonial_remove`) by the reviewer name and the content fingerprint
 (`content_sha256`) that `get` shows in that testimonial's `id`:
@@ -154,8 +160,12 @@ homepage built from a layout file in git, and that layout does not read the reco
   office address, license number): show on the agent's portfolio page
   (`https://properties.nextrealestate.team/<slug>`) within about five minutes. They
   do not show on the live homepage of those eight agents.
-- Testimonials (`testimonial_add`, `testimonial_remove`): show on that agent's
-  listing pages within about five minutes (the first three). Not on the homepage.
+- Testimonials (`testimonial_add`, `testimonial_remove`): a new testimonial shows
+  first on that agent's listing pages within about five minutes. Listing pages show
+  the first testimonial, or the first three when the agent has three or more. Not on
+  the homepage.
+- Short display name (`display_short_name`): shows in the texts leads receive, not
+  on the website.
 - Past sales (`sales_add`, `sales_remove`): show on the homepage within seconds,
   but only when the sale has a photo and ranks in the agent's top 24 sales by
   price. Otherwise it does not show at all: no photo, no card.
