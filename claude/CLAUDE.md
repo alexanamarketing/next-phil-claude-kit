@@ -78,3 +78,11 @@ in your vault automatically. You never type a git command.
 ## Markdown House Style
 
 Type `/markdown` any time for the house style, or read the full guide: `<vault-root>/docs/MARKDOWN-STYLE-GUIDE.md`
+
+<!-- kit-block:sitedoor v1 -->
+## Agent records on the website
+
+- A change to an agent's record on the website database (bio, title, testimonials, past sales, service areas, social links, license number, office address, headshot, homepage SEO text) goes through the `sitedoor` skill, using your own editor token from the Keychain.
+- It shows the change first and writes only after you say yes. Every change is logged in the MLS log and can be undone.
+- Never use a deploy key or `npx convex` for agent data.
+<!-- /kit-block:sitedoor -->

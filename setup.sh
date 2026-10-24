@@ -507,6 +507,17 @@ else
   fi
 fi
 
+# The agent-records block (sitedoor skill): one managed block at the end of
+# ~/.claude/CLAUDE.md, added or refreshed on every run, idempotent. A fresh copy
+# of the kit CLAUDE.md already carries it; an existing CLAUDE.md gets it appended.
+if $DRY_RUN; then
+  log_dry "python3 '$SCRIPT_DIR/scripts/claude-md-block.py' '$CLAUDE_MD_DEST' ensure  (agent-records block)"
+elif python3 "$SCRIPT_DIR/scripts/claude-md-block.py" "$CLAUDE_MD_DEST" ensure >/dev/null; then
+  log_ok "Agent-records block present in CLAUDE.md"
+else
+  log_warn "Could not add the agent-records block to $CLAUDE_MD_DEST (its markers look hand-edited); fix them and re-run"
+fi
+
 # Warn on reinstall before overwriting kit-managed hooks and skills
 if ls "$CLAUDE_DIR/hooks/"*.py "$CLAUDE_DIR/hooks/"*.sh &>/dev/null 2>&1 || \
    [ -d "$CLAUDE_DIR/skills/project" ] || [ -d "$CLAUDE_DIR/skills/sync" ]; then

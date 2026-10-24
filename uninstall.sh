@@ -10,13 +10,15 @@
 #
 # What it removes (kit-managed only):
 #   - Hook files: the safety hooks (block-secrets, command-guard, secret-guard,
-#                 index-enforcer, file-naming-check, claude-md-hygiene), the git
+#                 sitedoor-guard, index-enforcer, file-naming-check, claude-md-hygiene), the git
 #                 hooks (auto-stage, auto-commit), Helper Mode (helper-mode.py),
 #                 the tool-module engine (tool-module-*, tool_module_*,
 #                 toolupdate_apply), the writing-lint stack, pre-compact.sh, and
 #                 hooks/lib/hook_config.py
 #   - Skill directories: project, new-project, sync, archive-docs, doctor,
-#                        markdown, help, explain, unslop, helper, toolupdate, util/
+#                        markdown, help, explain, unslop, helper, toolupdate, util/,
+#                        sitedoor
+#   - The agent-records block in ~/.claude/CLAUDE.md
 #   - Pointer directory: ~/.claude/starter-kit/
 #   - Hook registrations from ~/.claude/settings.json whose command basename
 #     matches a kit hook (other hooks and all other settings are preserved)
@@ -106,6 +108,7 @@ KIT_HOOKS=(
   block-secrets-allow.txt
   command-guard.py
   secret-guard.py
+  sitedoor-guard.py
   index-enforcer.py
   file-naming-check.py
   claude-md-hygiene.py
@@ -139,8 +142,10 @@ KIT_SKILLS=(
   helper
   toolupdate
   util
+  sitedoor
 )
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 
 # ---------------------------------------------------------------------------
@@ -347,6 +352,7 @@ kit_basenames = {
     'block-secrets.py',
     'command-guard.py',
     'secret-guard.py',
+    'sitedoor-guard.py',
     'index-enforcer.py',
     'file-naming-check.py',
     'claude-md-hygiene.py',
@@ -460,6 +466,18 @@ if [ -f "$CLAUDE_MD" ]; then
   fi
 else
   log "    (CLAUDE.md not present — nothing to restore)"
+fi
+
+# Whatever CLAUDE.md is left (a restored pre-kit copy, for example) loses the
+# kit's agent-records block.
+if [ -f "$CLAUDE_MD" ]; then
+  if $DRY_RUN; then
+    log_dry "python3 '$SCRIPT_DIR/scripts/claude-md-block.py' '$CLAUDE_MD' remove  (agent-records block)"
+  elif python3 "$SCRIPT_DIR/scripts/claude-md-block.py" "$CLAUDE_MD" remove >/dev/null; then
+    log_ok "Agent-records block removed from CLAUDE.md (if it was there)"
+  else
+    log_warn "Could not remove the agent-records block from $CLAUDE_MD; delete it by hand"
+  fi
 fi
 
 log ""

@@ -29,6 +29,7 @@ index-enforcer.py
 lib/hook_config.py
 pre-compact.sh
 secret-guard.py
+sitedoor-guard.py
 tool-module-brief.py
 tool-module-learn.py
 tool-module-new.py
