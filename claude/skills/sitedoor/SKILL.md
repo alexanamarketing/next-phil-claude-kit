@@ -1,6 +1,6 @@
 ---
 name: sitedoor
-description: Update, add, fix or remove something on an agent's record in the website database (bio, title, testimonials, past sales, service areas, social links, license number, office address, headshot photo, homepage SEO text). Use it when the user says things like "put this testimonial on Victoria's site", "fix her bio on the site", "add this sale to his page" or "change her title". It shows the change first, writes only after the user says yes, logs every change, and can undo it.
+description: Update, add, fix or remove something on an agent's record in the website database (bio, title, testimonials, past sales, service areas, social links, license number, office address, headshot photo, homepage SEO text). Use it when the user says things like "put this testimonial on Victoria's site", "fix her bio on the site", "add this sale to his page" or "change her title". Also use it when the user asks to change an agent's domain, phone, email or GoHighLevel settings, so the answer says plainly that this tool does not do that. It shows the change first, writes only after the user says yes, logs every change, and can undo it.
 ---
 
 # sitedoor: change an agent's record on the website
@@ -26,7 +26,8 @@ It cannot change domains, phone numbers or email addresses. It cannot publish or
 unpublish a site, delete anything, touch GoHighLevel, or change tracking pixels.
 It never touches listings (the MLS feed keeps those in sync). If the user asks for
 one of those, say plainly that this tool does not do it and that Anthony handles it.
-Do not look for another way in.
+Do not look for another way in: do not offer a deploy key, `npx convex` or a change
+to the door's code, even as an option the user could pick.
 
 Page layouts and code still go through git the way the user already works.
 
