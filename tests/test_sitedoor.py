@@ -274,6 +274,38 @@ def main():
     check(rc == 0 and all("MLS%04d" % i in out for i in range(30)), "get --sales all prints every sale")
     rc, out, err = go(["get", "anthony-test", "--json"])
     check(rc == 0 and one_json(out) == get_body("anthony-test"), "get --json is the door body verbatim")
+    # long text reaches get output whole (review K15)
+    long_bio = "Bio start. " + "x" * 1480 + " BIO-END-MARK"
+    long_tm = "Testimonial start " + "y" * 600 + " TM-END-MARK"
+    para = "Para start " + "z" * 900 + " PARA-END-MARK"
+
+    def long_get(p, h, body):
+        req = json.loads(body.decode("utf-8"))
+        if req.get("op") != "get":
+            return default_responder(stub)(p, h, body)
+        b = get_body(req.get("slug"))
+        b["realtor"]["bio"] = long_bio
+        b["realtor"]["service_area_disclaimer"] = "Disc " + "d" * 700 + " DISC-END-MARK"
+        b["testimonials"][0]["content"] = long_tm
+        b["draft"]["about"] = {"paragraphs": [para]}
+        return 200, j(b)
+
+    stub.responder = long_get
+    rc, out, err = go(["get", "anthony-test"])
+    check(rc == 0 and long_bio in out, "get prints a 1,500-character bio whole")
+    check("DISC-END-MARK" in out and long_tm in out and "PARA-END-MARK" in out,
+          "get prints the disclaimer, testimonial text and about paragraphs whole")
+    # a plan that shrinks a text field shows both values whole and both lengths
+    old_bio, new_bio = "Old bio " + "o" * 1792, "New short bio " + "n" * 146
+    stub.responder = lambda p, h, body: (200, j({"ok": True, "action": "realtor_set", "slug": "anthony-test",
+                                                 "plan_id": "a" * 64, "request_id": "b" * 64, "changed": 1,
+                                                 "skipped_duplicate": [],
+                                                 "diff": [{"path": "bio", "before": old_bio, "after": new_bio}]}))
+    bio_pf = write_json(tmp, "bio.json", {"op": "realtor_set", "set": {"bio": new_bio}})
+    rc, out, err = go(["plan", "anthony-test", "--payload", bio_pf])
+    check(rc == 0 and old_bio in out and new_bio in out, "plan prints the before and after text whole")
+    check("1800 characters -> 160 characters" in out, "plan prints both lengths when the new text is shorter")
+    stub.responder = default_responder(stub)
 
     # plan sends op plan with write_op and payload_json (canonical string)
     pf = write_json(tmp, "p.json", {"op": "realtor_set", "set": {"title": "Broker"}})

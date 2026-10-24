@@ -60,6 +60,23 @@ def main():
     check("doctor.py" in out and "refresh" in out.lower(), "the merge step refreshes the kit-owned doctor.py")
     with open(os.path.join(vault, "scripts", "doctor.py")) as f:
         check(f.read() == "# old doctor\n", "a dry run changes nothing")
+    # a typed ~/X lands in $HOME/X, never $HOME/~/X (review K16)
+    r = subprocess.run(["bash", os.path.join(REPO, "setup.sh"), "--dry-run"], input="~/OtherVault\ny\n",
+                       capture_output=True, text=True, env=env, timeout=300)
+    out = r.stdout + r.stderr
+    check(r.returncode == 0 and "Vault root: %s/OtherVault" % home in out and "/~/" not in out,
+          "a typed ~/OtherVault becomes $HOME/OtherVault")
+    # a first install (no pointer file): Enter gives $HOME/vault
+    os.remove(os.path.join(home, ".claude", "starter-kit", "config.json"))
+    r = subprocess.run(["bash", os.path.join(REPO, "setup.sh"), "--dry-run"], input="\ny\n",
+                       capture_output=True, text=True, env=env, timeout=300)
+    out = r.stdout + r.stderr
+    check(r.returncode == 0 and "Vault root: %s/vault" % home in out and "/~/" not in out,
+          "Enter on a first install gives $HOME/vault")
+    r = subprocess.run(["bash", os.path.join(REPO, "setup.sh"), "--dry-run", "--vault-root", "~/ArgVault"],
+                       input="y\n", capture_output=True, text=True, env=env, timeout=300)
+    out = r.stdout + r.stderr
+    check(r.returncode == 0 and "Using --vault-root: %s/ArgVault" % home in out, "--vault-root '~/X' expands too")
     shutil.rmtree(home, ignore_errors=True)
     print("%d failure(s)" % len(FAILS))
     return 1 if FAILS else 0

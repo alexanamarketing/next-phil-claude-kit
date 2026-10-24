@@ -69,6 +69,8 @@ def main():
         "security find-generic-password -s some-other-app -a anthony -w",
         "bash setup.sh --vault-root ~/vault",
         "grep -n editor README.md",
+        "cd ~/next-phil-claude-kit && git log --grep editor",
+        "git -C /Users/phil/next-phil-claude-kit log --oneline -- claude/hooks/sitedoor-guard.py  # editor door",
     ]
     for c in allowed:
         rc, err = run(bash(c))
