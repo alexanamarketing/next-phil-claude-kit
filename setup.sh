@@ -105,7 +105,7 @@ ask() {
 expand_path() {
   local p="$1"
   case "$p" in
-    "~/"*) echo "$HOME/${p#~/}" ;;
+    "~/"*) echo "$HOME/${p#\~/}" ;;
     "~")   echo "$HOME" ;;
     *)     echo "$p" ;;
   esac

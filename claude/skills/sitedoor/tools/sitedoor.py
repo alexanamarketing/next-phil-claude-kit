@@ -326,11 +326,21 @@ def _photo_complete(path, kind, size, head):
 
 
 # ------------------------------------------------------------------ output
+def _full(v):
+    """A value printed whole: text as is, anything else as compact JSON."""
+    return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+
+
 def show_diff(body):
+    """Every before and after value printed whole, so the user approves exactly what is written."""
     lines = []
     for d in body.get("diff") or []:
         if isinstance(d, dict):
-            lines.append("  %s: %s -> %s" % (d.get("path", "?"), _short(d.get("before")), _short(d.get("after"))))
+            before, after = d.get("before"), d.get("after")
+            lines.append("  %s: %s -> %s" % (d.get("path", "?"), _full(before), _full(after)))
+            if isinstance(before, str) and isinstance(after, str) and len(after) < len(before):
+                lines.append("  %s: %d characters -> %d characters (the new text is shorter)"
+                             % (d.get("path", "?"), len(before), len(after)))
     return lines
 
 
@@ -371,7 +381,7 @@ def _flat(prefix, value, lines):
         for k in sorted(value):
             _flat("%s.%s" % (prefix, k) if prefix else k, value[k], lines)
     else:
-        lines.append("  %s: %s" % (prefix, _short(value, 160)))
+        lines.append("  %s: %s" % (prefix, _full(value)))
 
 
 def cmd_get(a, out):
@@ -390,7 +400,7 @@ def cmd_get(a, out):
         tid = t.get("id") or {}
         print("  %s | content_sha256 %s | rating %s | %s" % (
             tid.get("reviewer_name", t.get("reviewer_name")), tid.get("content_sha256"), t.get("rating"),
-            _short(t.get("content"), 80)))
+            _full(t.get("content"))))
     sales = body.get("sales")
     if not sales:
         print("Past sales: no sales record for this agent (past sales live in the homepage layout file in git).")

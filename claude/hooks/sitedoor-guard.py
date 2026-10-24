@@ -8,7 +8,8 @@ A PreToolUse hook on Bash. It blocks, with no exemption:
   escapes (\\xHH, \\NNN, \\uHHHH), $VAR and ${VAR} markers are stripped first, so
   next-phil-"editor", next-phil-\\editor or $'next-phil-\\x65ditor' still match;
 - any command where "next-phil" and "editor" both appear, which catches the name
-  split across a variable (S=next-phil; ... $S-editor);
+  split across a variable (S=next-phil; ... $S-editor); the kit's own folder name
+  (next-phil-claude-kit) does not count as "next-phil" for this rule;
 - a Keychain password lookup (find-generic-password with -w or -g) for account
   phil or phil-*, or one with no -s service at all (it would return the first
   password it finds), and dump-keychain -d.
@@ -29,6 +30,7 @@ import re
 import sys
 
 ITEM = "next-phil-editor"
+KIT_FOLDER = "next-phil-claude-kit"
 
 HEX = re.compile(r"\\x([0-9a-fA-F]{2})")
 UNI = re.compile(r"\\u([0-9a-fA-F]{4})")
@@ -50,7 +52,9 @@ def normalise(command):
 
 def reason_for(command):
     text = normalise(command)
-    if ITEM in text or ("next-phil" in text and "editor" in text):
+    # The kit's own folder name starts with next-phil, so it is taken out before the
+    # split-name check; otherwise "git log --grep editor" in the kit folder is blocked.
+    if ITEM in text or ("next-phil" in text.replace(KIT_FOLDER, "") and "editor" in text):
         return "names the editor token's Keychain item"
     if "find-generic-password" in text and PASSWORD_FLAG.search(text):
         if ACCOUNT_PHIL.search(text) or not SERVICE_FLAG.search(text):

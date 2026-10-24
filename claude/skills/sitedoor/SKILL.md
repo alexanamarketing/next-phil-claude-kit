@@ -35,8 +35,13 @@ Page layouts and code still go through git the way the user already works.
 First run `sitedoor.py get <slug>` to see the agent's current values. The slug is
 the agent's name in the site address, for example `victoria-kulszan`. It lists the
 record fields, the testimonials with their ids, the 20 newest past sales with their
-ids, and the homepage draft. To remove an older sale, run
+ids, and the homepage draft. Text fields print in full. To remove an older sale, run
 `sitedoor.py get <slug> --sales all` to find its id.
+
+Never edit text you have only seen shortened. For a bio or any other long text, run
+`get` first and start from the full current value. The plan prints the old and new
+text whole, and when the new text is shorter it prints both lengths; point that out
+to the user before they say yes.
 
 Then write the change into a payload file (below) and run
 `sitedoor.py plan <slug> --payload <file>`. Show the user the planned change line by
