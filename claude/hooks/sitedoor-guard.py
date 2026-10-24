@@ -12,7 +12,13 @@ A PreToolUse hook on Bash. It blocks, with no exemption:
   (next-phil-claude-kit) does not count as "next-phil" for this rule;
 - a Keychain password lookup (find-generic-password with -w or -g) for account
   phil or phil-*, or one with no -s service at all (it would return the first
-  password it finds), and dump-keychain -d.
+  password it finds), and dump-keychain -d. Commas, brackets, parentheses and +
+  count as spaces for these checks, so the same lookup written as a Python list
+  (['security','find-generic-password','-a','phil','-w']) is caught too, and a
+  name glued together with + ('next-phil-'+'edi'+'tor') is read joined up;
+- any command that loads the sitedoor tool as a Python module or calls its token
+  reader: import sitedoor, from sitedoor import, read_token, _SECRETS. Running the
+  tool as a script (python3 .../sitedoor.py whoami) is not affected.
 
 The sitedoor tool reads the token inside its own process and never names the item
 on its command line, so a normal sitedoor run is never blocked. The user adds the
@@ -41,7 +47,11 @@ SERVICE_FLAG = re.compile(r"(?:^|\s)-s\s")
 DUMP_SECRETS = re.compile(r"(?:^|\s)-[a-z]*d[a-z]*(?=\s|$)")
 
 
-def normalise(command):
+TOKEN_READER = ("import sitedoor", "from sitedoor import", "read_token", "_secrets")
+SEPARATORS = (",", "[", "]", "(", ")", "+")
+
+
+def unquote(command):
     text = HEX.sub(lambda m: chr(int(m.group(1), 16)), command)
     text = UNI.sub(lambda m: chr(int(m.group(1), 16)), text)
     text = OCT.sub(lambda m: chr(int(m.group(1), 8)), text)
@@ -50,12 +60,28 @@ def normalise(command):
     return text.lower()
 
 
-def reason_for(command):
-    text = normalise(command)
+def normalise(command):
+    """The command with quoting undone and list or call punctuation read as spaces,
+    so ['security','-a','phil','-w'] reads like the shell form."""
+    text = unquote(command)
+    for ch in SEPARATORS:
+        text = text.replace(ch, " ")
+    return text
+
+
+def names_item(text):
     # The kit's own folder name starts with next-phil, so it is taken out before the
     # split-name check; otherwise "git log --grep editor" in the kit folder is blocked.
-    if ITEM in text or ("next-phil" in text.replace(KIT_FOLDER, "") and "editor" in text):
+    return ITEM in text or ("next-phil" in text.replace(KIT_FOLDER, "") and "editor" in text)
+
+
+def reason_for(command):
+    text = normalise(command)
+    joined = unquote(command).replace("+", "")
+    if names_item(text) or names_item(joined):
         return "names the editor token's Keychain item"
+    if any(marker in text for marker in TOKEN_READER):
+        return "loads the sitedoor tool's token reader"
     if "find-generic-password" in text and PASSWORD_FLAG.search(text):
         if ACCOUNT_PHIL.search(text) or not SERVICE_FLAG.search(text):
             return "asks the Keychain for a password that may be the editor token"
