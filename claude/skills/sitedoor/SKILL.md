@@ -1,6 +1,6 @@
 ---
 name: sitedoor
-description: Update, add, fix or remove something on an agent's record in the website database (bio, title, testimonials, past sales, service areas, social links, license number, office address, headshot photo, homepage SEO text). Use it when the user says things like "put this testimonial on Victoria's site", "fix her bio on the site", "add this sale to his page" or "change her title". Also use it when the user asks to change an agent's domain, phone, email or GoHighLevel settings, so the answer says plainly that this tool does not do that. It shows the change first, writes only after the user says yes, logs every change, and can undo it.
+description: Update, add, fix or remove something on an agent's record in the website database (bio, title, testimonials, past sales, service areas, social links, license number, office address, headshot photo, homepage SEO text). Use it when the user says things like "put this testimonial on Victoria's site", "fix her bio on the site", "add this sale to his page" or "change her title". Also use it when the user asks to change an agent's domain, phone, email or GoHighLevel settings, to publish or unpublish a site, to add tracking pixels, to add open houses or listings, or to delete an agent, a site or a whole record, so the answer says plainly that this is not done this way and Anthony handles it. It shows the change first, writes only after the user says yes, logs every change, and can undo it.
 ---
 
 # sitedoor: change an agent's record on the website
@@ -19,12 +19,14 @@ any command when you want one JSON object back to read.
 
 Use it for a change to one agent's record: bio, title, first name or short display
 name, area and service areas, service area disclaimer, social links, license number,
-office address, headshot photo, testimonials, past sales, and the homepage SEO and
-hero text. Real-estate agents only; one agent per command.
+office address, headshot photo, testimonials, past sales, and the homepage draft's
+SEO and hero text (draft only, see "When it shows up"). Real-estate agents only; one
+agent per command.
 
 It cannot change domains, phone numbers or email addresses. It cannot publish or
-unpublish a site, delete anything, touch GoHighLevel, or change tracking pixels.
-It never touches listings (the MLS feed keeps those in sync). If the user asks for
+unpublish a site, delete an agent, a site or a whole record (removing one
+testimonial or past sale is fine), touch GoHighLevel, change tracking pixels, or add
+open houses. It never touches listings (the MLS feed keeps those in sync). If the user asks for
 one of those, say plainly that this tool does not do it and that Anthony handles it.
 Do not look for another way in: do not offer a deploy key, `npx convex` or a change
 to the door's code, even as an option the user could pick.
@@ -120,9 +122,10 @@ Fields: `seo.title`, `seo.description`, `seo.og_image`, `hero.headline`,
 `about.paragraphs` (a list of paragraphs), `theme.accent` (a color like `#1a2b3c`),
 and `sections.<kind>.enabled` (true or false, for a section the page already has:
 listings, past_sales, testimonials, service_areas, stats, valuation_cta, contact,
-reviews_widget). On agents whose
-homepage comes from a layout file in git, only the `seo.*` fields show. If the
-agent's homepage is still a draft, the change shows once Anthony publishes it.
+reviews_widget). These fields change the homepage DRAFT only. Nothing public
+changes until Anthony publishes that agent's homepage again, and the draft goes live
+with his next publish. On agents whose homepage comes from a layout file in git, only
+the `seo.*` fields would ever show, and only after that publish.
 
 ## Past sales for an agent with no sales record
 
@@ -141,8 +144,25 @@ changes nothing on the site.
 
 ## When it shows up
 
-The homepage shows a change within seconds. The agent's portfolio page can take up
-to five minutes.
+Before you apply a change, tell the user where it will show and when, in the words
+below. Most changes do not show on the agent's homepage. The eight agents with live
+homepages (Miele, Danytza, Maria, James, Patty, Donna, Eydie, Victoria) have a
+homepage built from a layout file in git, and that layout does not read the record.
+
+- Record fields (`realtor_set`: bio, title, headshot, service areas, social links,
+  office address, license number): show on the agent's portfolio page
+  (`https://properties.nextrealestate.team/<slug>`) within about five minutes. They
+  do not show on the live homepage of those eight agents.
+- Testimonials (`testimonial_add`, `testimonial_remove`): show on that agent's
+  listing pages within about five minutes (the first three). Not on the homepage.
+- Past sales (`sales_add`, `sales_remove`): show on the homepage within seconds,
+  but only when the sale has a photo and ranks in the agent's top 24 sales by
+  price. Otherwise it does not show at all: no photo, no card.
+- Homepage SEO and hero text (`site_set`): edits the draft only. Nothing public
+  changes until Anthony publishes the homepage again. The draft can be seen at
+  `https://properties.nextrealestate.team/preview/<slug>`. Tell the user that the
+  draft will go live with Anthony's next publish, so they know an unpublished edit
+  is waiting there.
 
 ## The token
 
