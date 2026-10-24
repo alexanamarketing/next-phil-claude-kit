@@ -92,6 +92,14 @@ def main():
     check("before" in low and "where" in low and "tell the user" in low,
           "skill tells Claude to say where a change will show before applying it")
     check("next publish" in low, "skill says draft text goes live with Anthony's next publish")
+    check("display_short_name" in low and "texts leads" in low,
+          "When it shows up lists display_short_name as the name in the texts leads receive (G16)")
+    flat = " ".join(low.split())
+    check("first three)" not in flat and "shows first" in flat,
+          "When it shows up says a new testimonial shows first on the listing pages (G17)")
+    fields = body.split("Set fields on the agent's record", 1)[-1].split("Add a testimonial", 1)[0].lower()
+    check("texts leads" in fields and "plain name" in fields,
+          "realtor_set field list says display_short_name is the name in lead texts, a plain name only (G16)")
 
     token = body.split("## The token", 1)[-1].split("## When the door says no", 1)[0].lower()
     check("unauthorized" in token and "ask anthony for a new token" in token
