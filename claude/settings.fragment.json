@@ -43,6 +43,15 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/sitedoor-guard.py"
+          }
+        ]
+      },
+      {
         "matcher": "Write",
         "hooks": [
           {

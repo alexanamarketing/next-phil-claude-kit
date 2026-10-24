@@ -73,7 +73,7 @@ done < <(grep -rnE 'gio trash|xdg-open|pbcopy|xclip|wl-copy|secret-tool|keyring|
 # ---- 4b. identity leaks anywhere in payload --------------------------------
 while IFS= read -r f; do
   note "identity leak (agency name) in $f"
-done < <(payload_files | xargs grep -Il 'Alexana' 2>/dev/null)
+done < <(payload_files | xargs grep -Il 'Alex[a]na' 2>/dev/null)
 
 # ---- 5. bare /usr/bin/<tool> (not /usr/bin/env) in hooks + skills ----------
 while IFS= read -r line; do

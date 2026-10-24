@@ -1194,6 +1194,52 @@ def check_mattpocock() -> CheckResult:
     )
 
 
+def check_sitedoor() -> CheckResult:
+    """Non-fatal: the sitedoor skill is installed and an editor token is in the Keychain.
+
+    Presence only: the token value is never read into this process's output. The
+    lookup's stdout and stderr go to /dev/null and only the exit code is used.
+    """
+    name = "sitedoor (agent records)"
+    skill = Path.home() / ".claude" / "skills" / "sitedoor" / "SKILL.md"
+    if not skill.is_file():
+        return CheckResult(
+            name=name,
+            passed=False,
+            message="sitedoor skill not installed",
+            fix="Pull the kit and re-run setup:\n  git pull && bash setup.sh",
+            fatal=False,
+        )
+    account = os.environ.get("SITEDOOR_ACCOUNT") or "phil"
+    service = "next-phil-editor"
+    probes = []
+    if shutil.which("security"):
+        probes.append(["security", "find-generic-password", "-s", service, "-a", account])
+    if shutil.which("secret-tool"):
+        probes.append(["secret-tool", "lookup", "service", service, "account", account])
+    for argv in probes:
+        try:
+            r = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except Exception:
+            continue
+        if r.returncode == 0:
+            return CheckResult(
+                name=name,
+                passed=True,
+                message=f"sitedoor skill installed; editor token present for account {account}",
+                fix="",
+                fatal=False,
+            )
+    return CheckResult(
+        name=name,
+        passed=False,
+        message=f"sitedoor skill installed, but no editor token in the Keychain for account {account}",
+        fix="In Terminal (not in Claude), run this and paste the token Anthony sent when it asks:\n"
+            f"  security add-generic-password -U -s {service} -a {account} -w",
+        fatal=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Report rendering
 # ---------------------------------------------------------------------------
@@ -1329,6 +1375,7 @@ def main() -> None:
         check_system_project(vault_root),
         check_os_commands(vault_root),
         check_mattpocock(),
+        check_sitedoor(),
         check_hooks_smoke_test(),
     ]
 

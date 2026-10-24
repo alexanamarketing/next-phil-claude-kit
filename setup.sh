@@ -105,7 +105,7 @@ ask() {
 expand_path() {
   local p="$1"
   case "$p" in
-    "~/"*) echo "$HOME/${p#~/}" ;;
+    "~/"*) echo "$HOME/${p#\~/}" ;;
     "~")   echo "$HOME" ;;
     *)     echo "$p" ;;
   esac
@@ -289,11 +289,26 @@ if [ -n "$VAULT_ROOT_ARG" ]; then
   VAULT_ROOT="$(expand_path "$VAULT_ROOT_ARG")"
   log_ok "Using --vault-root: $VAULT_ROOT"
 else
+  # A re-run offers the vault the last install recorded in the pointer file, so
+  # pressing Enter keeps the same vault instead of falling back to ~/vault.
+  VAULT_DEFAULT="~/vault"
+  PRIOR_POINTER="$HOME/.claude/starter-kit/config.json"
+  if [ -f "$PRIOR_POINTER" ]; then
+    PRIOR_VAULT="$(python3 -c '
+import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get("vault_root") or ""
+except Exception:
+    v = ""
+print(v if isinstance(v, str) else "")
+' "$PRIOR_POINTER" 2>/dev/null || true)"
+    [ -n "$PRIOR_VAULT" ] && VAULT_DEFAULT="$PRIOR_VAULT"
+  fi
   log "  Your vault is the folder that holds your projects (active/, inactive/, etc.)."
   log "  Press Enter to accept the default, or type a custom path."
-  read -r -p "  Vault root [~/vault]: " VAULT_ROOT_INPUT
+  read -r -p "  Vault root [$VAULT_DEFAULT]: " VAULT_ROOT_INPUT
   if [ -z "$VAULT_ROOT_INPUT" ]; then
-    VAULT_ROOT="$(expand_path "~/vault")"
+    VAULT_ROOT="$(expand_path "$VAULT_DEFAULT")"
   else
     VAULT_ROOT="$(expand_path "$VAULT_ROOT_INPUT")"
   fi
@@ -320,6 +335,15 @@ if [ -d "$VAULT_ROOT" ] && [ -n "$(ls -A "$VAULT_ROOT" 2>/dev/null)" ]; then
     else
       cp -rn "$SKELETON_SRC/." "$VAULT_ROOT/"
       log_ok "Vault skeleton merged (existing files preserved)"
+    fi
+    # doctor.py is kit-owned code, not user content: refresh it so new checks reach
+    # existing installs (the merge above never overwrites a file that is already there).
+    if $DRY_RUN; then
+      log_dry "refresh '$VAULT_ROOT/scripts/doctor.py' from the kit (kit-owned)"
+    else
+      mkdir -p "$VAULT_ROOT/scripts"
+      cp "$SKELETON_SRC/scripts/doctor.py" "$VAULT_ROOT/scripts/doctor.py"
+      log_ok "Refreshed scripts/doctor.py from the kit"
     fi
   fi
 else
@@ -505,6 +529,17 @@ else
     cp "$SCRIPT_DIR/claude/CLAUDE.md" "$CLAUDE_MD_DEST"
     log_ok "CLAUDE.md installed"
   fi
+fi
+
+# The agent-records block (sitedoor skill): one managed block at the end of
+# ~/.claude/CLAUDE.md, added or refreshed on every run, idempotent. A fresh copy
+# of the kit CLAUDE.md already carries it; an existing CLAUDE.md gets it appended.
+if $DRY_RUN; then
+  log_dry "python3 '$SCRIPT_DIR/scripts/claude-md-block.py' '$CLAUDE_MD_DEST' ensure  (agent-records block)"
+elif python3 "$SCRIPT_DIR/scripts/claude-md-block.py" "$CLAUDE_MD_DEST" ensure >/dev/null; then
+  log_ok "Agent-records block present in CLAUDE.md"
+else
+  log_warn "Could not add the agent-records block to $CLAUDE_MD_DEST (its markers look hand-edited); fix them and re-run"
 fi
 
 # Warn on reinstall before overwriting kit-managed hooks and skills
