@@ -17,8 +17,10 @@ A PreToolUse hook on Bash. It blocks, with no exemption:
   (['security','find-generic-password','-a','phil','-w']) is caught too, and a
   name glued together with + ('next-phil-'+'edi'+'tor') is read joined up;
 - any command that loads the sitedoor tool as a Python module or calls its token
-  reader: import sitedoor, from sitedoor import, read_token, _SECRETS. Running the
-  tool as a script (python3 .../sitedoor.py whoami) is not affected.
+  reader: import sitedoor, from sitedoor, sitedoor.read_token, or read_token or
+  _SECRETS as whole names. Names that only contain those letters (realtor_secrets,
+  HANDOFF_READ_TOKEN) pass. Running the tool as a script (python3 .../sitedoor.py
+  whoami) is not affected.
 
 The sitedoor tool reads the token inside its own process and never names the item
 on its command line, so a normal sitedoor run is never blocked. The user adds the
@@ -47,7 +49,12 @@ SERVICE_FLAG = re.compile(r"(?:^|\s)-s\s")
 DUMP_SECRETS = re.compile(r"(?:^|\s)-[a-z]*d[a-z]*(?=\s|$)")
 
 
-TOKEN_READER = ("import sitedoor", "from sitedoor import", "read_token", "_secrets")
+# Whole identifiers only: realtor_secrets or HANDOFF_READ_TOKEN in the website repo
+# contain the same letters and must pass.
+TOKEN_READER = re.compile(
+    r"import\s+sitedoor\b|from\s+sitedoor\b|sitedoor\.(?:read_token|_secrets)\b"
+    r"|(?<![a-z0-9_])(?:read_token|_secrets)(?![a-z0-9_])"
+)
 SEPARATORS = (",", "[", "]", "(", ")", "+")
 
 
@@ -80,7 +87,7 @@ def reason_for(command):
     joined = unquote(command).replace("+", "")
     if names_item(text) or names_item(joined):
         return "names the editor token's Keychain item"
-    if any(marker in text for marker in TOKEN_READER):
+    if TOKEN_READER.search(text):
         return "loads the sitedoor tool's token reader"
     if "find-generic-password" in text and PASSWORD_FLAG.search(text):
         if ACCOUNT_PHIL.search(text) or not SERVICE_FLAG.search(text):
