@@ -1,15 +1,17 @@
 ---
 name: sitedoor
-description: Update, add, fix or remove something on an agent's record in the website database (bio, title, testimonials, past sales, service areas, social links, license number, office address, headshot photo, homepage SEO text). Use it when the user says things like "put this testimonial on Victoria's site", "fix her bio on the site", "add this sale to his page" or "change her title". Also use it when the user asks to change an agent's domain, phone, email or GoHighLevel settings, to publish or unpublish a site, to add tracking pixels, to add open houses or listings, or to delete an agent, a site or a whole record, so the answer says plainly that this is not done this way and Anthony handles it. It shows the change first, writes only after the user says yes, logs every change, and can undo it.
+description: Update, add, fix or remove anything on an agent's website record or homepage draft (bio, title, name, phone, testimonials, past sales, service areas, social links, license, office address, website and legal links, headshot, logos, partner details, SEO, hero, about text, sections). Use it when the user says things like "put this testimonial on Victoria's site", "fix her phone number on the site", "add this sale to his page" or "change her title": it edits everything on an agent's site except publishing. Also use it when the user asks to change an agent's domain, email or GoHighLevel settings, to publish or unpublish a site, to add tracking pixels, to add open houses or listings, or to delete an agent, a site or a whole record: try it, and when the editor refuses, the change goes in a pull request on GitHub that Anthony reviews. It shows the change first, writes only after the user says yes, logs every change, and can undo it.
 ---
 
 # sitedoor: change an agent's record on the website
 
 The agent websites read each agent's record from the website database. This skill
-changes that record through the editor door, a narrow entrance that accepts only the
-fields listed below. The user never needs a deploy key, `npx convex`, or Anthony for
-these changes. Every write shows up in the MLS log as "Phil (via Claude)" and can be
-undone.
+changes that record through the editor door. It takes every content field on an
+agent's record and homepage draft; it refuses only publishing, the fields that would
+break the site if edited (sign-in email, domains, GoHighLevel wiring, MLS-owned data,
+record ids) and Phil's and Jim's own records. The user never needs a deploy key,
+`npx convex`, or Anthony for these changes. Every write shows up in the MLS log as
+"Phil (via Claude)" and can be undone.
 
 The tool is `tools/sitedoor.py` inside this skill's folder. Run it with `python3`
 and the full path to that file; below it is written as `sitedoor.py`. Add `--json` to
@@ -17,19 +19,32 @@ any command when you want one JSON object back to read.
 
 ## When to use it
 
-Use it for a change to one agent's record: bio, title, first name or short display
-name, area and service areas, service area disclaimer, social links, license number,
-office address, headshot photo, testimonials, past sales, and the homepage draft's
-SEO and hero text (draft only, see "When it shows up"). Real-estate agents only; one
-agent per command.
+Use it for any change to one agent's website content: the record (name, first name,
+short display name, title, bio, phone, area and service areas, disclaimer, license
+number, office address, website, privacy and terms links, booking link, designations,
+headshot and its framing, logos, partner details, social links), testimonials, past
+sales (seller or buyer side), and the homepage draft (SEO, hero, button, about text,
+accent color, logo variant, the section list and each section's switch, reviews widget
+id). Real-estate agents only; one agent per command.
 
-It cannot change domains, phone numbers or email addresses. It cannot publish or
-unpublish a site, delete an agent, a site or a whole record (removing one
-testimonial or past sale is fine), touch GoHighLevel, change tracking pixels, or add
-open houses. It never touches listings (the MLS feed keeps those in sync). If the user asks for
-one of those, say plainly that this tool does not do it and that Anthony handles it.
-Do not look for another way in: do not offer a deploy key, `npx convex` or a change
-to the door's code, even as an option the user could pick.
+Always try the door first, even when you are not sure it takes the change. The door
+refuses only:
+
+- publishing or unpublishing a site, or putting a draft live (Anthony signs off on the
+  side-by-side first);
+- fields that would break things if edited: the agent's sign-in email, domains and
+  hosting, GoHighLevel ids, forms, calendars and chat, tracking pixels, redirects and
+  blog paths, imported page HTML and legal text, MLS and roster data, record ids and
+  feature switches;
+- Phil's and Jim's own records (phil-sexton, jim-sexton);
+- deleting an agent, a site or a whole record (removing one testimonial or past sale
+  is fine), open houses and listings (the MLS feed keeps those in sync).
+
+When the door refuses a change, its answer says so and ends with the next step: make
+that change as a pull request on GitHub in DevNextRealEstate/next-listing-pages, which
+Anthony reviews and merges. Tell the user that in plain words and offer to open the
+pull request. Do not work around a refusal: do not offer a deploy key, `npx convex` or
+a change to the door's code, even as an option the user could pick.
 
 Page layouts and code still go through git the way the user already works.
 
@@ -81,13 +96,20 @@ Set fields on the agent's record (`realtor_set`):
 
     {"op": "realtor_set", "set": {"title": "Broker Associate", "bio": "..."}}
 
-Fields: `bio`, `title`, `name_first`, `display_short_name`, `area`, `service_areas`
-(one comma list in a single string), `service_area_disclaimer`, `license_number`,
-`office_address_line1`, `office_address_line2`, `office_city_state_zip`,
-`headshot_url` (a photo address from `sitedoor.py photo`), and
-`social_links.facebook`, `.instagram`, `.linkedin`, `.youtube`, `.tiktok`,
-`.twitter` (https links on that network; an empty string removes one). Text cannot
-contain `<` or `>`.
+Fields: every field `get` lists under the record. The common ones: `name`,
+`name_first`, `display_short_name`, `title`, `bio`, `phone_raw` (the number links dial:
+10 digits, optionally starting `+1`) and `phone_display` (as pages print it, like
+`(602) 555-1234`), `area`, `service_areas` (one comma list in a single string),
+`service_area_disclaimer`, `license_number`, `office_address_line1`,
+`office_address_line2`, `office_city_state_zip`, `website`, `privacy_policy_url`,
+`terms_url`, `seller_booking_url` (https links), `designations` (a list),
+`headshot_url`, `brand_logo_url`, `homesmart_next_logo_url`, `partner_headshot_url`
+(photo addresses from `sitedoor.py photo`), `headshot_framing`
+(`{"size": "130%", "position": "50% 20%"}`), `partner_name`, `partner_first_name`,
+`partner_title`, `partner_bio`, and `social_links.facebook`, `.instagram`,
+`.linkedin`, `.youtube`, `.tiktok`, `.twitter` (https links on that network; an empty
+string removes one). `null` removes an optional field (a partner, the framing, the
+booking link). Text cannot contain `<` or `>`.
 
 `display_short_name` is the agent's name in the texts leads receive (for example
 "You're on the list! Victoria with NEXT HomeSmart here"), not on the website. It
@@ -107,7 +129,8 @@ Remove one (`testimonial_remove`) by the reviewer name and the content fingerpri
 
     {"op": "testimonial_remove", "reviewer_name": "Dana R.", "content_sha256": "..."}
 
-Add past sales (`sales_add`, up to 20 at a time, seller side only):
+Add past sales (`sales_add`, up to 20 at a time, `"side"` is `"seller"` or `"buyer"`;
+a buyer-side sale shows with a "Represented Buyer" badge):
 
     {"op": "sales_add", "sales": [{"address": "...", "city": "...", "zip": "...", "price": 450000, "side": "seller", "close_date": "2026-05-01", "mls_number": "...", "photo": "<photo address>"}]}
 
@@ -125,14 +148,18 @@ Homepage SEO and hero text (`site_set`):
     {"op": "site_set", "set": {"seo.title": "...", "seo.description": "..."}}
 
 Fields: `seo.title`, `seo.description`, `seo.og_image`, `hero.headline`,
-`hero.subhead`, `hero.image`, `hero.primary_cta.label`, `hero.primary_cta.href`,
-`about.paragraphs` (a list of paragraphs), `theme.accent` (a color like `#1a2b3c`),
-and `sections.<kind>.enabled` (true or false, for a section the page already has:
-listings, past_sales, testimonials, service_areas, stats, valuation_cta, contact,
-reviews_widget). These fields change the homepage DRAFT only. Nothing public
-changes until Anthony publishes that agent's homepage again, and the draft goes live
-with his next publish. On agents whose homepage comes from a layout file in git, only
-the `seo.*` fields would ever show, and only after that publish.
+`hero.subhead`, `hero.image`, `hero.primary_cta.label`, `hero.primary_cta.href` (send
+both together), `about.paragraphs` (a list of paragraphs), `theme.accent` (a color like
+`#1a2b3c`), `theme.logo_variant`, `reviews_widget_id`, `sections` (the whole list, in
+order, like `[{"kind": "listings", "enabled": true}, ...]`, to reorder, add or drop
+sections; kinds: listings, past_sales, testimonials, service_areas, stats,
+valuation_cta, contact, reviews_widget) and `sections.<kind>.enabled` (true or false,
+for a section the draft already has). Send either `sections` or a switch in one change,
+not both. These fields change the homepage DRAFT only. Nothing public changes until
+Anthony publishes that agent's homepage again, and the draft goes live with his next
+publish. On agents whose homepage comes from a layout file in git, only the `seo.*`
+fields would ever show, and only after that publish; a change to that layout goes in a
+pull request.
 
 ## Past sales for an agent with no sales record
 
@@ -156,8 +183,9 @@ below. Most changes do not show on the agent's homepage. The eight agents with l
 homepages (Miele, Danytza, Maria, James, Patty, Donna, Eydie, Victoria) have a
 homepage built from a layout file in git, and that layout does not read the record.
 
-- Record fields (`realtor_set`: bio, title, headshot, service areas, social links,
-  office address, license number): show on the agent's portfolio page
+- Record fields (`realtor_set`: name, bio, title, phone, headshot, logos, partner,
+  service areas, social links, website and legal links, office address, license
+  number): show on the agent's portfolio page
   (`https://properties.nextrealestate.team/<slug>`) within about five minutes. They
   do not show on the live homepage of those eight agents.
 - Testimonials (`testimonial_add`, `testimonial_remove`): a new testimonial shows
@@ -166,6 +194,12 @@ homepage built from a layout file in git, and that layout does not read the reco
   the homepage.
 - Short display name (`display_short_name`): shows in the texts leads receive, not
   on the website.
+- Phone (`phone_raw`, `phone_display`): changes the number the agent's pages show and
+  dial (portfolio and listing pages, the footer, seller value letters) within about
+  five minutes. It does not change GoHighLevel: the number leads are texted from and
+  where GoHighLevel routes leads stay as they are there.
+- Booking link and headshot framing (`seller_booking_url`, `headshot_framing`): show
+  on the seller value letter and value page.
 - Past sales (`sales_add`, `sales_remove`): show on the homepage within seconds,
   but only when the sale has a photo and ranks in the agent's top 24 sales by
   price. Otherwise it does not show at all: no photo, no card.
@@ -197,7 +231,14 @@ never ask the user to.
 The tool prints the reason. Exit codes: 0 done, 2 the command was wrong, 3 the
 internet or the certificate check failed (on a Mac the fix is the "Install
 Certificates" step the message names), 4 the door or a local check refused the
-change, 5 no token on this computer. Tell the user the reason in plain words. If the
-door refuses a field or an agent, that is on purpose; do not work around it.
+change, 5 no token on this computer. Tell the user the reason in plain words.
+
+- A reason that ends "Make it as a pull request on GitHub in
+  DevNextRealEstate/next-listing-pages" means the change is outside what the editor
+  can do. Say so, and offer to make it as a pull request there; Anthony reviews and
+  merges it. Do not look for another way in.
+- `stale_plan`, `drift`, a rate limit, a value the door says is wrong (too long, not a
+  photo it issued, a typo in the slug): fix the request or wait, then plan again. If
+  the value is right and the door still says no, that is a pull request too.
 
 Rehearsals go on the test agents `anthony-test`, `next-demo` and `bri-test`.

@@ -74,6 +74,10 @@ def main():
     for c in blocked:
         rc, err = run(bash(c))
         check(rc == 2 and err.strip(), "blocked: %s" % c[:60])
+    rc, err = run(bash(blocked[0]))
+    flat = " ".join(err.split())
+    check("pull request" in flat and "DevNextRealEstate/next-listing-pages" in flat and "Anthony reviews" in flat,
+          "the block message says a change the editor cannot make goes in a pull request Anthony reviews")
 
     allowed = [
         "python3 ~/.claude/skills/sitedoor/tools/sitedoor.py plan anthony-test --payload /tmp/p.json",

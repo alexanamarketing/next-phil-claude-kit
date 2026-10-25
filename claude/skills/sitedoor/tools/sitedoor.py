@@ -81,6 +81,21 @@ TIMEOUT = 60
 
 EXIT_OK, EXIT_USAGE, EXIT_NETWORK, EXIT_REFUSED, EXIT_NO_TOKEN = 0, 2, 3, 4, 5
 
+# The door ends a refusal of the change itself with this sentence (convex/editorDoor/policy.ts
+# PR_HINT). The tool adds it when a refusal of that kind arrives without it.
+PR_HINT = ("This change is outside what the editor can do. Make it as a pull request on GitHub in "
+           "DevNextRealEstate/next-listing-pages instead; Anthony reviews and merges it.")
+PR_REASONS = ("field_not_allowed", "publish_not_allowed", "excluded_slug", "unknown_action")
+
+
+def with_pr_hint(body):
+    """The refusal's reason, ending with the pull request sentence when the change itself was refused."""
+    reason = body.get("reason") or "refused"
+    wants = body.get("next_step") == "pull_request" or body.get("reason_code") in PR_REASONS
+    if wants and "pull request" not in reason:
+        reason = reason + " " + PR_HINT
+    return reason
+
 TLS_HINT = (
     "Python could not check the website's security certificate. On a Mac, open "
     "Finder, then Applications, then the Python 3 folder, and double-click "
@@ -710,7 +725,7 @@ def main(argv=None):
             out.json_once(f.body)
         else:
             body = f.body
-            print("sitedoor: %s (%s%s)" % (body.get("reason") or "refused", body.get("code"),
+            print("sitedoor: %s (%s%s)" % (with_pr_hint(body), body.get("code"),
                                            "/" + body["reason_code"] if body.get("reason_code")
                                            and body.get("reason_code") != body.get("code") else ""),
                   file=sys.stderr)
