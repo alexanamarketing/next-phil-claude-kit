@@ -6,12 +6,22 @@ Matcher: Write
 Behavior: deny with suggestion to use v1, v2, v3 instead.
 Exception: files inside a deliverables/ folder use simple descriptive names,
 no versions needed, so the check is skipped there.
+Exception: code, style and config files (a website component such as
+publish-complete.tsx or use-ready.ts) are not versioned documents, so the check
+skips them too; it is about documents and notes.
 """
 import json
 import re
 import sys
 
 BANNED = ("FINAL", "DONE", "COMPLETE", "READY", "APPROVED", "PUBLISHED")
+
+# Code, style and config files: named by what they do, never versioned like a document.
+CODE_EXTS = {
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "css", "scss", "sass", "less",
+    "html", "svg", "py", "sh", "yml", "yaml", "toml", "sql", "go", "rs", "rb",
+    "java", "kt", "swift", "vue", "svelte", "astro", "snap",
+}
 
 try:
     input_data = json.load(sys.stdin)
@@ -29,6 +39,8 @@ if "/deliverables/" in file_path:
     sys.exit(0)
 
 filename = file_path.rsplit("/", 1)[-1]
+if "." in filename and filename.rsplit(".", 1)[-1].lower() in CODE_EXTS:
+    sys.exit(0)
 name_without_ext = filename.rsplit(".", 1)[0]
 
 pattern = r"(?i)(?:^(" + "|".join(BANNED) + r")$|.+[-_](" + "|".join(BANNED) + r")(?:[-_]?v?\d*)?$)"

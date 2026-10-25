@@ -565,6 +565,20 @@ else
   log_ok "Skills installed to ~/.claude/skills/"
 fi
 
+# Website code: design and layout changes happen in a copy of
+# DevNextRealEstate/next-listing-pages. Only look for it and report (no copy, no
+# network); Claude copies it with site-checkout.sh --clone the first time it is needed.
+SITE_CHECKOUT="$CLAUDE_DIR/skills/sitedoor/tools/site-checkout.sh"
+if $DRY_RUN; then
+  log_dry "bash '$SITE_CHECKOUT'  (report where the website code is, if anywhere)"
+elif [ -f "$SITE_CHECKOUT" ]; then
+  SITE_LINE="$(bash "$SITE_CHECKOUT" 2>/dev/null | tail -1)"
+  case "$SITE_LINE" in
+    SITE_REPO=*) log_ok "Website code found at ${SITE_LINE#SITE_REPO=}" ;;
+    *) log "  Website code not on this computer yet. Claude copies it from GitHub the first time you ask for a design change." ;;
+  esac
+fi
+
 # Copy references (tool-module seeds, focus config). Merge without overwriting
 # (cp -n) so a re-install never wipes the tool notes Claude has already learned.
 if [ -d "$SCRIPT_DIR/claude/references" ]; then

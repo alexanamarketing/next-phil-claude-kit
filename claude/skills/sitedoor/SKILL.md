@@ -1,6 +1,6 @@
 ---
 name: sitedoor
-description: Update, add, fix or remove anything on an agent's website record or homepage draft (bio, title, name, phone, testimonials, past sales, service areas, social links, license, office address, website and legal links, headshot, logos, partner details, SEO, hero, about text, sections). Use it when the user says things like "put this testimonial on Victoria's site", "fix her phone number on the site", "add this sale to his page" or "change her title": it edits everything on an agent's site except publishing. Also use it when the user asks to change an agent's domain, email or GoHighLevel settings, to publish or unpublish a site, to add tracking pixels, to add open houses or listings, or to delete an agent, a site or a whole record: try it, and when the editor refuses, the change goes in a pull request on GitHub that Anthony reviews. It shows the change first, writes only after the user says yes, logs every change, and can undo it.
+description: Update, add, fix or remove anything on an agent's website record or homepage draft (bio, title, name, phone, testimonials, past sales, service areas, social links, license, office address, website and legal links, headshot, logos, partner details, SEO, hero, about text, sections). Use it when the user says things like "put this testimonial on Victoria's site", "fix her phone number on the site", "add this sale to his page" or "change her title": it edits everything on an agent's site except publishing. Also use it when the user asks to change an agent's domain, email or GoHighLevel settings, to publish or unpublish a site, to add tracking pixels, to add open houses or listings, or to delete an agent, a site or a whole record: try it, and when the editor refuses, the change goes in a pull request on GitHub that Anthony reviews. It shows the change first, writes only after the user says yes, logs every change, and can undo it. For a design, layout, styling or colour change, or anything else on the site that is not a record field, it finds the user's copy of the website code and makes the change there with a preview link first.
 ---
 
 # sitedoor: change an agent's record on the website
@@ -46,7 +46,8 @@ Anthony reviews and merges. Tell the user that in plain words and offer to open 
 pull request. Do not work around a refusal: do not offer a deploy key, `npx convex` or
 a change to the door's code, even as an option the user could pick.
 
-Page layouts and code still go through git the way the user already works.
+Page layouts, styling and code are not record fields: make those changes yourself in the
+website code (Design and code changes, at the end). They do not need Anthony.
 
 ## The order every time
 
@@ -158,16 +159,17 @@ for a section the draft already has). Send either `sections` or a switch in one 
 not both. These fields change the homepage DRAFT only. Nothing public changes until
 Anthony publishes that agent's homepage again, and the draft goes live with his next
 publish. On agents whose homepage comes from a layout file in git, only the `seo.*`
-fields would ever show, and only after that publish; a change to that layout goes in a
-pull request.
+fields would ever show, and only after that publish; a change to that layout is a code
+change you make yourself (Design and code changes, at the end).
 
 ## Past sales for an agent with no sales record
 
 If the door answers `no_sales_row`, that agent's past sales live in the homepage
 layout file in git: `data/ghl-layouts/<slug>/home.json`, the `pastSales` slot
 (its `sales` list), with photos under `public/past-sales/<slug>/`. Make the change
-there and commit it the way the user already does. Only an agent with neither a
-sales record nor that layout slot needs Anthony.
+there as a code change (Design and code changes, at the end). An agent with neither a
+sales record nor that layout slot needs the slot added to their layout file, which is
+a code change too.
 
 ## Photos
 
@@ -242,3 +244,34 @@ change, 5 no token on this computer. Tell the user the reason in plain words.
   the value is right and the door still says no, that is a pull request too.
 
 Rehearsals go on the test agents `anthony-test`, `next-demo` and `bri-test`.
+
+## Design and code changes
+
+Design and everything else on the site that is not a record field (layout, styling,
+colours, fonts, spacing, new or reworked sections, a different look for one agent, any
+page of properties.nextrealestate.team or an agent site) is a code change. Make it
+yourself; never tell the user it is out of reach or needs Anthony.
+
+1. Find the user's copy of the website code:
+   `bash <this skill's folder>/tools/site-checkout.sh`. Its last line is
+   `SITE_REPO=<folder>`. When it finds none, ask the user whether they keep it
+   somewhere else (`--path <folder>`), else run it again with `--clone`, which copies
+   DevNextRealEstate/next-listing-pages from GitHub to `~/Projects/next-listing-pages`
+   and installs it. If GitHub refuses, the user signs in with `gh auth login` in
+   Terminal (and accepts the repository invite if one is waiting), then try again.
+2. Run `git fetch origin` in that folder and read the current rules with
+   `git show origin/main:AGENTS.md`, section "Design Changes from Phil's Chat" (the
+   copy in the folder may be older). Follow them: a new branch from a fresh main, the change, `bash scripts/gate.sh`, push the
+   branch, show the user the Vercel preview link and the pages to look at, and merge to
+   main only after the user says yes. If the folder has uncommitted work or sits on
+   another branch, ask the user before switching.
+3. For a quick look before pushing, `npm run dev` in that folder needs `.env.local`.
+   Get it under the user's own Vercel login: `npx vercel login` once, then
+   `npx vercel link --yes --project next-listing-pages --scope next-real-estate-team`
+   and `npx vercel env pull .env.local --environment=preview --yes`. Never print or
+   commit that file, and never run `npx convex dev` or `npx convex deploy` there.
+
+The only changes that go to Anthony as a pull request are the edge cases: what the
+editor refuses, a repo check or guard that fixing the change cannot pass, and backend
+changes under `convex/`. Never skip a check (`--no-verify`, force-push), and never put
+a draft agent site live.
