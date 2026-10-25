@@ -418,6 +418,21 @@ def main():
           "door refusal exits 4 and names code and reason")
     rc, out, err = go(["get", "victoria-kulszan", "--json"])
     check(rc == 4 and one_json(out) == refusal, "door refusal --json prints the body as one object")
+    check("pull request" not in (out + err), "a scope refusal (a test token) carries no pull request line")
+
+    # a refusal of the change itself always ends with the pull request line, exactly once
+    hint = ("This change is outside what the editor can do. Make it as a pull request on GitHub in "
+            "DevNextRealEstate/next-listing-pages instead; Anthony reviews and merges it.")
+    bare = {"ok": False, "code": "refused", "reason_code": "field_not_allowed", "reason": "\"email\" is not editable."}
+    stub.responder = lambda p, h, body: (403, j(bare))
+    rc, out, err = go(["get", "anthony-test"])
+    check(rc == 4 and hint in err and err.count("pull request") == 1,
+          "a field refusal without the hint still tells the user to open a pull request")
+    told = dict(bare, reason=bare["reason"] + " " + hint, next_step="pull_request")
+    stub.responder = lambda p, h, body: (403, j(told))
+    rc, out, err = go(["get", "anthony-test"])
+    check(rc == 4 and err.count("pull request") == 1, "a refusal that already carries the hint prints it once")
+    stub.responder = lambda p, h, body: (403, j(refusal))
     stub.responder = lambda p, h, body: (401, j({"ok": False, "code": "unauthorized",
                                                  "reason_code": "unauthorized", "reason": "token not accepted"}))
     rc, out, err = go(["whoami"])

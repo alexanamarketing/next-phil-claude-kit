@@ -47,13 +47,25 @@ def block_body():
 
 
 def closes_side_routes(text):
-    t = text.lower()
+    """No side route: no deploy key, no npx convex, no change to the door's code; a
+    refused change goes in a pull request on the website repo that Anthony reviews."""
+    t = " ".join(text.lower().split())
     return ("deploy key" in t and "npx convex" in t and "door's code" in t
-            and "anthony handles" in t)
+            and "pull request" in t and "devnextrealestate/next-listing-pages" in t
+            and "anthony reviews" in t)
 
 
-REFUSED_WORDS = ("domain", "phone", "email", "gohighlevel", "publish", "unpublish",
+def door_first(text):
+    """Try the editor first; only a refusal sends the change to a pull request."""
+    t = " ".join(text.lower().split())
+    return "first" in t and "refuse" in t and "pull request" in t and "work around" in t
+
+
+# Requests that must still load the skill, so the answer is "pull request", not a hunt
+# through the repo for another way in.
+REFUSED_WORDS = ("domain", "email", "gohighlevel", "publish", "unpublish",
                  "tracking pixel", "open house", "listing", "delet")
+EDITABLE_WORDS = ("phone", "name", "logo", "partner", "website", "section", "everything")
 
 
 def names_refused_fields(text):
@@ -69,17 +81,26 @@ def main():
     skill = read(SKILL)
     m = re.search(r"^description:\s*(.+)$", skill, re.M)
     desc = m.group(1) if m else ""
-    check(names_refused_fields(desc), "skill description names domain, phone, email, GoHighLevel, "
+    check(names_refused_fields(desc), "skill description names domain, email, GoHighLevel, "
           "publishing, tracking pixels, open houses, listings and deleting")
+    check(all(w in desc.lower() for w in EDITABLE_WORDS),
+          "skill description says it edits everything, phone, names, logos, partner, website and sections included")
+    check("pull request" in desc.lower(), "skill description says a refused change becomes a pull request")
 
     block = block_body()
     check(names_refused_fields(block), "CLAUDE.md block names the refused fields")
-    check(closes_side_routes(block), "CLAUDE.md block says Anthony handles them and closes the side routes")
+    check(closes_side_routes(block), "CLAUDE.md block sends refused changes to a pull request Anthony reviews and closes the side routes")
+    check(door_first(block), "CLAUDE.md block says try the editor first and open a pull request only when it refuses")
+    check("phone numbers," not in block.split("not done this way")[0] if "not done this way" in block else True,
+          "CLAUDE.md block no longer lists phone numbers as refused")
     check(block in read(KIT_MD), "kit claude/CLAUDE.md carries the current block byte for byte")
 
     body = skill.split("---", 2)[-1]
     when = body.split("## The order every time", 1)[0]
     check(closes_side_routes(when), "skill body's refusal list closes the side routes")
+    check(door_first(when), "skill body says try the door first; if it refuses, open a pull request instead of working around it")
+    refused_part = " ".join(when.lower().split())
+    check("cannot change domains, phone numbers" not in refused_part, "skill body no longer refuses phone numbers")
 
     shows = body.split("## When it shows up", 1)[-1].split("## The token", 1)[0]
     low = shows.lower()

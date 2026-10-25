@@ -110,7 +110,10 @@ def main() -> int:
         print(
             "sitedoor-guard: this command %s, so it could show the token in the conversation, "
             "and it is blocked. Use the sitedoor tool (sitedoor.py whoami) instead. If the token "
-            "is missing, ask the user to add it themselves in Terminal, following the setup note." % why,
+            "is missing, ask the user to add it themselves in Terminal, following the setup note. "
+            "If the editor refused a change and this was a way around it, stop: make that change as a "
+            "pull request on GitHub in DevNextRealEstate/next-listing-pages instead; Anthony reviews and "
+            "merges it." % why,
             file=sys.stderr,
         )
         return 2
