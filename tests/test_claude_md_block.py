@@ -2,8 +2,8 @@
 """claude-md-block.py test: one managed sitedoor block at the end of a CLAUDE.md.
 
 Cases: an absent file stays absent; ensure appends the block; a second ensure is
-byte-identical; a file with no trailing newline; an older block (v0, or v1 with
-different text, or a block in the middle) is replaced so exactly one current block
+byte-identical; a file with no trailing newline; an older block (v0, the v1 that knew only the
+editor, or v2 with different text, or a block in the middle) is replaced so exactly one current block
 sits at the end; remove takes it back out; a start marker with no end marker is
 refused without touching the file; the kit's own claude/CLAUDE.md already carries
 the current block, so ensure on a fresh copy is a no-op.
@@ -19,7 +19,7 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, "scripts", "claude-md-block.py")
 KIT_MD = os.path.join(REPO, "claude", "CLAUDE.md")
-START = "<!-- kit-block:sitedoor v1 -->"
+START = "<!-- kit-block:sitedoor v2 -->"
 END = "<!-- /kit-block:sitedoor -->"
 
 FAILS = []
@@ -97,11 +97,19 @@ def main():
     check(rc == 0 and "old text" not in s and "v0" not in s and s.count(START) == 1, "an older v0 block is replaced")
     check(s.count("kit-block:sitedoor v") == 1 and s.count(END) == 1, "exactly one block after replacing")
 
-    # a v1 block with different text is replaced
+    # the v1 block (editor only, no design work) on an installed CLAUDE.md becomes v2
+    write(p, "# Rules\n\n<!-- kit-block:sitedoor v1 -->\n## Agent records on the website\n\n- old v1 text\n"
+          + END + "\n")
+    rc, out = run(p, "ensure")
+    s = read(p)
+    check(rc == 0 and "old v1 text" not in s and "sitedoor v1" not in s and s.count(START) == 1
+          and "site-checkout.sh" in s, "an installed v1 block is replaced by the v2 block")
+
+    # a current-version block with different text is replaced
     write(p, "# Rules\n\n" + START + "\nstale wording\n" + END + "\n")
     rc, out = run(p, "ensure")
     s = read(p)
-    check(rc == 0 and "stale wording" not in s and s.count(START) == 1, "a v1 block with different text is refreshed")
+    check(rc == 0 and "stale wording" not in s and s.count(START) == 1, "a v2 block with different text is refreshed")
 
     # a block in the middle moves to the end, the text after it stays
     write(p, "# Rules\n\n" + START + "\nmid\n" + END + "\n\n## Later section\n- keep me\n")
