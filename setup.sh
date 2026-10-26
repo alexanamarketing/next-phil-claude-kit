@@ -111,6 +111,22 @@ expand_path() {
   esac
 }
 
+# Copy a folder's contents into another, never overwriting a file that is already
+# there. Replaces `cp -rn`: macOS cp -n exits 1 whenever it skips an existing file,
+# which stops this script under set -e.
+copy_missing() {
+  local src="$1" dest="$2" rel
+  mkdir -p "$dest"
+  while IFS= read -r rel; do
+    mkdir -p "$dest/$rel"
+  done < <(cd "$src" && find . -mindepth 1 -type d)
+  while IFS= read -r rel; do
+    if [ ! -e "$dest/$rel" ] && [ ! -L "$dest/$rel" ]; then
+      cp -pP "$src/$rel" "$dest/$rel"
+    fi
+  done < <(cd "$src" && find . \( -type f -o -type l \))
+}
+
 # ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
@@ -333,7 +349,7 @@ if [ -d "$VAULT_ROOT" ] && [ -n "$(ls -A "$VAULT_ROOT" 2>/dev/null)" ]; then
     if $DRY_RUN; then
       log_dry "cp -rn '$SKELETON_SRC/.' '$VAULT_ROOT/'"
     else
-      cp -rn "$SKELETON_SRC/." "$VAULT_ROOT/"
+      copy_missing "$SKELETON_SRC" "$VAULT_ROOT"
       log_ok "Vault skeleton merged (existing files preserved)"
     fi
     # doctor.py is kit-owned code, not user content: refresh it so new checks reach
@@ -572,7 +588,8 @@ SITE_CHECKOUT="$CLAUDE_DIR/skills/sitedoor/tools/site-checkout.sh"
 if $DRY_RUN; then
   log_dry "bash '$SITE_CHECKOUT'  (report where the website code is, if anywhere)"
 elif [ -f "$SITE_CHECKOUT" ]; then
-  SITE_LINE="$(bash "$SITE_CHECKOUT" 2>/dev/null | tail -1)"
+  # site-checkout exits non-zero when the code is not here; that is a report, not a failure.
+  SITE_LINE="$(bash "$SITE_CHECKOUT" 2>/dev/null | tail -1)" || true
   case "$SITE_LINE" in
     SITE_REPO=*) log_ok "Website code found at ${SITE_LINE#SITE_REPO=}" ;;
     *) log "  Website code not on this computer yet. Claude copies it from GitHub the first time you ask for a design change." ;;
@@ -585,8 +602,7 @@ if [ -d "$SCRIPT_DIR/claude/references" ]; then
   if $DRY_RUN; then
     log_dry "mkdir -p '$CLAUDE_DIR/references' && cp -rn '$SCRIPT_DIR/claude/references/.' '$CLAUDE_DIR/references/'"
   else
-    mkdir -p "$CLAUDE_DIR/references"
-    cp -rn "$SCRIPT_DIR/claude/references/." "$CLAUDE_DIR/references/"
+    copy_missing "$SCRIPT_DIR/claude/references" "$CLAUDE_DIR/references"
     log_ok "References installed to ~/.claude/references/ (tool-module seeds preserved on re-install)"
   fi
 fi
