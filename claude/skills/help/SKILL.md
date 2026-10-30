@@ -47,6 +47,7 @@ Commonly used commands:
   /help           - show this list. /help off hides the startup list once you know it; /help on brings it back
   /archive-docs   - tidy up your notes and to-do list when they get long
   /doctor         - check that everything is installed correctly
+  /adsdoor        - check whether an agent's Facebook ads connection works, and what to fix (it only reads)
 
 /helper explains the words; /help lists the commands.
 ```

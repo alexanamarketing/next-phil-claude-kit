@@ -10,15 +10,15 @@
 #
 # What it removes (kit-managed only):
 #   - Hook files: the safety hooks (block-secrets, command-guard, secret-guard,
-#                 sitedoor-guard, index-enforcer, file-naming-check, claude-md-hygiene), the git
+#                 sitedoor-guard, adsdoor-guard, index-enforcer, file-naming-check, claude-md-hygiene), the git
 #                 hooks (auto-stage, auto-commit), Helper Mode (helper-mode.py),
 #                 the tool-module engine (tool-module-*, tool_module_*,
 #                 toolupdate_apply), the writing-lint stack, pre-compact.sh, and
 #                 hooks/lib/hook_config.py
 #   - Skill directories: project, new-project, sync, archive-docs, doctor,
 #                        markdown, help, explain, unslop, helper, toolupdate, util/,
-#                        sitedoor
-#   - The agent-records block in ~/.claude/CLAUDE.md
+#                        sitedoor, adsdoor
+#   - The agent-records and ads-check blocks in ~/.claude/CLAUDE.md
 #   - Pointer directory: ~/.claude/starter-kit/
 #   - Hook registrations from ~/.claude/settings.json whose command basename
 #     matches a kit hook (other hooks and all other settings are preserved)
@@ -109,6 +109,7 @@ KIT_HOOKS=(
   command-guard.py
   secret-guard.py
   sitedoor-guard.py
+  adsdoor-guard.py
   index-enforcer.py
   file-naming-check.py
   claude-md-hygiene.py
@@ -143,6 +144,7 @@ KIT_SKILLS=(
   toolupdate
   util
   sitedoor
+  adsdoor
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -353,6 +355,7 @@ kit_basenames = {
     'command-guard.py',
     'secret-guard.py',
     'sitedoor-guard.py',
+    'adsdoor-guard.py',
     'index-enforcer.py',
     'file-naming-check.py',
     'claude-md-hygiene.py',
@@ -477,6 +480,13 @@ if [ -f "$CLAUDE_MD" ]; then
     log_ok "Agent-records block removed from CLAUDE.md (if it was there)"
   else
     log_warn "Could not remove the agent-records block from $CLAUDE_MD; delete it by hand"
+  fi
+  if $DRY_RUN; then
+    log_dry "python3 '$SCRIPT_DIR/scripts/claude-md-block.py' '$CLAUDE_MD' remove adsdoor  (ads-check block)"
+  elif python3 "$SCRIPT_DIR/scripts/claude-md-block.py" "$CLAUDE_MD" remove adsdoor >/dev/null; then
+    log_ok "Ads-check block removed from CLAUDE.md (if it was there)"
+  else
+    log_warn "Could not remove the ads-check block from $CLAUDE_MD; delete it by hand"
   fi
 fi
 

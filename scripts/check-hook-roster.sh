@@ -18,6 +18,7 @@ HOOKS="$REPO/claude/hooks"
 
 # The intended roster (relative to claude/hooks/). Keep alphabetized.
 ALLOWLIST=$(cat <<'EOF'
+adsdoor-guard.py
 auto-commit.sh
 auto-stage.sh
 block-secrets.py
