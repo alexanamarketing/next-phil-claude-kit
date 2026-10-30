@@ -44,6 +44,12 @@ def main():
         return 1
     with open(HOOK) as f:
         check(f.readline().strip() == "#!/usr/bin/env python3", "portable shebang")
+    # a hook that cannot run fails open, so nothing would be blocked
+    check(os.access(HOOK, os.X_OK), "adsdoor-guard.py is executable on disk")
+    r = subprocess.run(["git", "-C", REPO, "ls-files", "-s", "--", "claude/hooks/adsdoor-guard.py"],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode == 0 and r.stdout.strip():
+        check(r.stdout.split()[0] == "100755", "adsdoor-guard.py is committed with its exec bit (100755)")
 
     blocked = [
         "security find-generic-password -s next-phil-ads-status -a phil -w",

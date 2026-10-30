@@ -137,15 +137,25 @@ PENDING = agent("sample-two", "Sample Two", stored=None, assigned=False, state="
                 allowed=True, request={"requested_at": T_REFUSED, "requested_by": "admin:phil",
                                        "approved_at": None, "assigned_at": None, "page_id": PAGE_B})
 
-# Sentences from the approved copy (Anthony's Q4 answer, 2026-10-29), checked word for word.
-CLICK_PATH_BITS = [
-    "First get the Page into NEXT's business. Go to business.facebook.com/settings and pick the NEXT business.",
-    "Left menu Accounts > Pages > Add > Request access to a Page.",
-    "turn on Content and Ads only, and send. The agent approves it on their Page under Settings > Page access.",
-    "Then give it to NEXTOSADMIN. In the same settings, left menu Users > System users > NEXTOSADMIN > Assign assets.",
-    "under Partial access turn on Content and Ads and leave everything else off, including Full control. "
-    "Save changes.",
+# The click path from the approved copy (Block C, Anthony's Q4 answer, 2026-10-29), each paragraph in full.
+SKIP_NOTE = "Skip the first paragraph if the Page already shows under Accounts > Pages."
+CLICK_PATH_FULL = [
+    "First get the Page into NEXT's business. Go to business.facebook.com/settings and pick the NEXT business. "
+    "Left menu Accounts > Pages > Add > Request access to a Page. Paste the agent's Page name or link, turn on "
+    "Content and Ads only, and send. The agent approves it on their Page under Settings > Page access.",
+    "Then give it to NEXTOSADMIN. In the same settings, left menu Users > System users > NEXTOSADMIN > Assign "
+    "assets. Pick Pages, tick the agent's Page, then under Partial access turn on Content and Ads and leave "
+    "everything else off, including Full control. Save changes.",
 ]
+
+
+def convex_down_empty():
+    """The door's answer when the website database is down: no roster, so no agents at all."""
+    d = document([])
+    d["sources"]["convex"] = {"ok": False, "read_at": None}
+    d["kind"] = "source_unavailable"
+    d["source"] = "convex"
+    return d
 
 
 # ---------------------------------------------------------------- stub door
@@ -360,7 +370,10 @@ def main():
     rc, out, err = go(["--agent", "sample-two"])
     f = flat(out)
     check("The Facebook Page is not assigned to NEXT yet. Phil:" in f, "an unassigned Page says it is Phil's to do")
-    check(all(b in f for b in CLICK_PATH_BITS), "the unassigned line carries the approved click path word for word")
+    check(all(b in f for b in CLICK_PATH_FULL) and SKIP_NOTE in f,
+          "the unassigned line carries both approved click path paragraphs and the skip note in full")
+    at = [f.find(x) for x in [SKIP_NOTE] + CLICK_PATH_FULL]
+    check(min(at) >= 0 and at == sorted(at), "the skip note prints before the first click path paragraph")
     check("Send Meta request" not in out and "NEXT Tools" not in out and "has not sent" not in out,
           "an unconnected Page gets the manual click path, never a request button or an automatic request")
 
@@ -411,6 +424,12 @@ def main():
     check("Waiting on Sample Two to approve NEXT's request on their Facebook Page. They find it under Settings > "
           "Page access > Pending requests. Sent Oct 29." in flat(out), "a pending request says where the agent approves it")
 
+    # while requests are not open (no readable onboard state file) a request line is never shown
+    stub.responder = serve(document([PENDING], onboard_present=False))
+    rc, out, err = go(["--agent", "sample-two"])
+    check(rc == 3 and "Waiting on" not in out and "Waiting on" not in err,
+          "a request state with no onboard state file is refused and prints no request line")
+
     # ---- test accounts and the fallback Page
     stub.responder = serve(document([DEMO, GOOD]))
     rc, out, err = go(["--all"])
@@ -429,6 +448,16 @@ def main():
           "a 503 with a document names the source that did not answer")
     check("not on the open-house text list" in flat(out), "a partial answer still shows what it could read")
     check(rc == 1, "a partial answer exits 1")
+
+    # the website database down: the door has no roster to send, so the answer is partial, never "all fine"
+    stub.responder = serve(convex_down_empty(), status=503)
+    rc, out, err = go(["--all"])
+    check("No agents on the roster." not in out, "a down website database never reads as an empty roster")
+    check("Could not check everything. The website database did not answer, so this is partial." in flat(out),
+          "a down website database with no agents names the source and says the answer is partial")
+    check(rc == 1, "a down website database with no agents exits 1 (rc=%s)" % rc)
+    rc, out, err = go(["--all", "--json"])
+    check(rc == 1 and one_json(out) == convex_down_empty(), "--json keeps exit 1 when a source is down and no agents")
 
     # ---- --json
     doc = document([GOOD, UNASSIGNED])
@@ -462,12 +491,21 @@ def main():
         (429, {"kind": "rate_limited", "retry_after_s": 600},
          "You hit the limit of 60 checks an hour or 600 a day. Try again in 10 minutes."),
         (503, {"kind": "source_unavailable", "source": "engine"},
-         "The ads check is not answering right now. Try again in a few minutes. If it keeps failing, tell Anthony."),
+         "The ads engine did not answer right now. Try again in a few minutes. If it keeps failing, tell Anthony."),
+        (503, {"kind": "source_unavailable", "source": "convex"},
+         "The website database did not answer right now. Try again in a few minutes. If it keeps failing, "
+         "tell Anthony."),
+        (503, {"kind": "source_unavailable", "source": "elsewhere"},
+         "Part of the ads check did not answer right now, and it did not say which part. Try again in a few "
+         "minutes. If it keeps failing, tell Anthony."),
+        (503, {"kind": "source_unavailable"},
+         "Part of the ads check did not answer right now, and it did not say which part. Try again in a few "
+         "minutes. If it keeps failing, tell Anthony."),
     ]
     for status, body, line in cases:
         stub.responder = serve(body, status=status)
         rc, out, err = go(["--agent", "sample-nobody"])
-        check(rc == 3 and line in flat(out + err), "HTTP %d prints its next step" % status)
+        check(rc == 3 and line in flat(out + err), "HTTP %d %s prints its next step" % (status, body))
     stub.responder = lambda p: (404, b"", None)
     rc, out, err = go(["--agent", "sample-agent"])
     check(rc == 3 and "not answering right now" in (out + err), "a door that is switched off reads as not answering")

@@ -96,13 +96,18 @@ def main():
     d = flat(desc)
     check("ads connection" in d and "only reads" in d, "description says it checks the ads connection and only reads")
     check(names_refusals(desc), "description names the refused requests and the drafted message to Anthony")
-    check("is ted's ads connection working" in d or "ads connection working" in d,
+    check("is dana's ads connection working" in d or "ads connection working" in d,
           "description carries the phrase Phil will use")
 
     body = skill.split("---", 2)[-1]
     no = body.split("## What it says no to", 1)[-1].split("\n## ", 1)[0] if "## What it says no to" in body else ""
     check(bool(no), "skill body has a 'What it says no to' section")
     check(names_refusals(no), "that section names each refused request and offers the drafted message")
+    bullets = [ln.strip().lower() for ln in no.splitlines() if ln.strip().startswith("- ")]
+    for phrase in ("- storing or fixing a page id on an agent's record",
+                   "- adding an agent to the open-house text list, or taking them off it",
+                   "- restarting the ads engine"):
+        check(any(b.startswith(phrase) for b in bullets), "that section refuses, as its own bullet: %s" % phrase[2:])
     check(side_routes_closed(no), "that section names ssh, a deploy key and npx convex only to rule them out")
     check("sitedoor" in flat(no) and "facebook token" in flat(no),
           "that section rules out the editor and the Facebook token as a way to store a Page id")

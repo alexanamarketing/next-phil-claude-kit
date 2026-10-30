@@ -78,6 +78,7 @@ def print(*args, **kwargs):  # noqa: A001  (module-wide redacting print)
 
 
 # ------------------------------------------------------------------ the words (approved copy, 2026-10-29)
+SKIP_NOTE = "Skip the first paragraph if the Page already shows under Accounts > Pages."
 CLICK_PATH = [
     "First get the Page into NEXT's business. Go to business.facebook.com/settings and pick the NEXT business. "
     "Left menu Accounts > Pages > Add > Request access to a Page. Paste the agent's Page name or link, turn on "
@@ -85,7 +86,6 @@ CLICK_PATH = [
     "Then give it to NEXTOSADMIN. In the same settings, left menu Users > System users > NEXTOSADMIN > Assign "
     "assets. Pick Pages, tick the agent's Page, then under Partial access turn on Content and Ads and leave "
     "everything else off, including Full control. Save changes.",
-    "Skip the first paragraph if the Page already shows under Accounts > Pages.",
 ]
 NOT_ASSIGNED = "The Facebook Page is not assigned to NEXT yet. Phil: "
 MISSING_TASK = ("NEXT can see the Page but is missing %s. Phil: open the Page under NEXTOSADMIN in Business "
@@ -117,7 +117,11 @@ REQUEST_LINES = {
 }
 NOT_REQUESTED = "NEXT has not sent %s a Page request yet."
 SOURCE_WORDS = {"meta": "Facebook", "convex": "The website database", "map": "The text list",
-                "ledger": "The ads engine's log"}
+                "ledger": "The ads engine's log", "engine": "The ads engine"}
+PARTIAL = "could not check everything. %s did not answer, so this is partial."
+SOURCE_NOT_ANSWERING = "%s did not answer right now. Try again in a few minutes. If it keeps failing, tell Anthony."
+UNNAMED_NOT_ANSWERING = ("Part of the ads check did not answer right now, and it did not say which part. Try "
+                         "again in a few minutes. If it keeps failing, tell Anthony.")
 
 NO_TOKEN = "There is no ads check token in your Keychain. Run the Keychain step from the setup message again."
 TOKEN_REFUSED = "The ads check did not accept your token. Ask Anthony for a new one."
@@ -572,7 +576,12 @@ def fetch(token, query, slug):
         retry = body.get("retry_after_s")
         retry = retry if isinstance(retry, int) and not isinstance(retry, bool) and retry > 0 else 3600
         raise Fail(EXIT_REFUSED, "rate_limited", RATE_LIMITED % _minutes(retry))
-    code = kind if kind in ("source_unavailable", "method_not_allowed") else "http_%d" % status
+    if status == 503 and kind == "source_unavailable":
+        source = body.get("source")
+        if isinstance(source, str) and source in SOURCE_WORDS:
+            raise Fail(EXIT_REFUSED, "source_unavailable", SOURCE_NOT_ANSWERING % SOURCE_WORDS[source])
+        raise Fail(EXIT_REFUSED, "source_unavailable", UNNAMED_NOT_ANSWERING)
+    code = kind if kind == "method_not_allowed" else "http_%d" % status
     raise Fail(EXIT_REFUSED, code, NOT_ANSWERING)
 
 
@@ -598,7 +607,7 @@ def problems(doc, a):
                 c = pg["candidates"][0]
                 out.append((NO_ID % (c["name"], c["id"]), []))
             else:
-                out.append((NOT_ASSIGNED + CLICK_PATH[0], CLICK_PATH[1:]))
+                out.append((NOT_ASSIGNED + SKIP_NOTE, CLICK_PATH))
         elif not pg["assigned"]:
             out.append((WRONG_ID, []))
         else:
@@ -629,6 +638,10 @@ def problems(doc, a):
     return out
 
 
+def any_down(doc):
+    return doc.get("kind") == "source_unavailable" or any(doc["sources"][k]["ok"] is False for k in OK_SOURCES)
+
+
 def first_down(doc):
     if doc.get("source") in SOURCE_WORDS:
         return doc["source"]
@@ -641,6 +654,10 @@ def first_down(doc):
 def report(doc, show_tests):
     agents = [a for a in doc["agents"] if show_tests or not a["test_identity"]]
     if not agents:
+        if any_down(doc):
+            partial = PARTIAL % SOURCE_WORDS[first_down(doc)]
+            print(partial[0].upper() + partial[1:])
+            return EXIT_MISSING
         print("No agents on the roster.")
         return EXIT_OK
     rc = EXIT_OK
@@ -650,7 +667,7 @@ def report(doc, show_tests):
         if a["ok"] is True:
             verdict = "ads connection working."
         elif a["ok"] is None:
-            verdict = "could not check everything. %s did not answer, so this is partial." % SOURCE_WORDS[first_down(doc)]
+            verdict = PARTIAL % SOURCE_WORDS[first_down(doc)]
             rc = EXIT_MISSING
         else:
             n = len(lines)
@@ -701,6 +718,8 @@ def run(argv, as_json):
     if as_json:
         print(json.dumps(doc, ensure_ascii=False, indent=2))
         shown = [x for x in doc["agents"] if a.agent or a.tests or not x["test_identity"]]
+        if any_down(doc):
+            return EXIT_MISSING
         return EXIT_OK if all(x["ok"] is True for x in shown) else EXIT_MISSING
     return report(doc, show_tests=bool(a.tests or a.agent))
 
