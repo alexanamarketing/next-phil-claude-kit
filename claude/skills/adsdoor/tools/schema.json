@@ -1,0 +1,557 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ads-status/v1",
+  "title": "Ads connection status door response (GET /ads/status/v1)",
+  "description": "Frozen response schema for the ads status door, the ads-status CLI, the adsdoor kit skill and the onboarding grid. A field change is a new version. Free-text strings are marked x-free-text and run the leak scan; every other string is pinned by a pattern, an enum or a const. Extra keys on an onboard_row are allowed and ignored by the door, never copied into a response.",
+  "$ref": "#/$defs/status_document",
+  "$defs": {
+    "iso_time": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "iso_time_or_null": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "page_id": {
+      "type": "string",
+      "pattern": "^[0-9]{5,20}$"
+    },
+    "page_id_or_null": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9]{5,20}$"
+    },
+    "free_text": {
+      "type": "string",
+      "maxLength": 200,
+      "x-free-text": true
+    },
+    "free_text_or_null": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 200,
+      "x-free-text": true
+    },
+    "bool_or_null": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "meta_task": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z_]{1,40}$"
+    },
+    "refusal_code": {
+      "type": "string",
+      "enum": [
+        "agent_page_not_connected",
+        "agent_page_revoked",
+        "agent_page_unverifiable",
+        "agent_page_changed",
+        "unknown"
+      ]
+    },
+    "request_state": {
+      "type": "string",
+      "enum": [
+        "not_requested",
+        "requested_pending",
+        "approved_unassigned",
+        "connected",
+        "expired",
+        "error"
+      ]
+    },
+    "requested_by": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^(intake|admin:[a-z0-9._+-]{1,64})$"
+    },
+    "source_status": {
+      "type": "object",
+      "required": [
+        "ok",
+        "read_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "read_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        }
+      }
+    },
+    "onboard_source_status": {
+      "type": "object",
+      "required": [
+        "ok",
+        "read_at",
+        "present"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "read_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "present": {
+          "type": "boolean"
+        }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "required": [
+        "sha",
+        "booted_at",
+        "billing_mode",
+        "billing_account_id",
+        "scan_minutes",
+        "sms_mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "booted_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "billing_mode": {
+          "const": "brokerage"
+        },
+        "billing_account_id": {
+          "type": "string",
+          "pattern": "^act_[0-9]{9,20}$"
+        },
+        "scan_minutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sms_mode": {
+          "type": "string",
+          "enum": [
+            "live",
+            "test"
+          ]
+        }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "required": [
+        "meta",
+        "convex",
+        "map",
+        "ledger",
+        "onboard"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "meta": {
+          "$ref": "#/$defs/source_status"
+        },
+        "convex": {
+          "$ref": "#/$defs/source_status"
+        },
+        "map": {
+          "$ref": "#/$defs/source_status"
+        },
+        "ledger": {
+          "$ref": "#/$defs/source_status"
+        },
+        "onboard": {
+          "$ref": "#/$defs/onboard_source_status"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/page_id"
+        },
+        "name": {
+          "$ref": "#/$defs/free_text"
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "required": [
+        "stored_id",
+        "stored_updated_at",
+        "assigned",
+        "assigned_name",
+        "has_advertise",
+        "has_create_content",
+        "stored_matches_assigned",
+        "tasks",
+        "candidates",
+        "fallback"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "stored_id": {
+          "$ref": "#/$defs/page_id_or_null"
+        },
+        "stored_updated_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "assigned": {
+          "$ref": "#/$defs/bool_or_null"
+        },
+        "assigned_name": {
+          "$ref": "#/$defs/free_text_or_null"
+        },
+        "has_advertise": {
+          "$ref": "#/$defs/bool_or_null"
+        },
+        "has_create_content": {
+          "$ref": "#/$defs/bool_or_null"
+        },
+        "stored_matches_assigned": {
+          "$ref": "#/$defs/bool_or_null"
+        },
+        "tasks": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/meta_task"
+          }
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        },
+        "fallback": {
+          "type": "boolean"
+        }
+      }
+    },
+    "engine_refusal": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "code",
+        "at",
+        "stale",
+        "stale_reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/refusal_code"
+        },
+        "at": {
+          "$ref": "#/$defs/iso_time"
+        },
+        "stale": {
+          "type": "boolean"
+        },
+        "stale_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "verified_after",
+            "restart_after_store",
+            "stored_after",
+            null
+          ]
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": [
+        "requested_at",
+        "requested_by",
+        "approved_at",
+        "assigned_at",
+        "page_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "requested_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "requested_by": {
+          "$ref": "#/$defs/requested_by"
+        },
+        "approved_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "assigned_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "page_id": {
+          "$ref": "#/$defs/page_id_or_null"
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "required": [
+        "slug",
+        "name",
+        "has_secrets_row",
+        "test_identity",
+        "page",
+        "sms_map",
+        "engine_refusal",
+        "ok",
+        "request_state",
+        "request",
+        "request_allowed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "slug": {
+          "$ref": "#/$defs/slug"
+        },
+        "name": {
+          "$ref": "#/$defs/free_text_or_null"
+        },
+        "has_secrets_row": {
+          "$ref": "#/$defs/bool_or_null"
+        },
+        "test_identity": {
+          "type": "boolean"
+        },
+        "page": {
+          "$ref": "#/$defs/page"
+        },
+        "sms_map": {
+          "$ref": "#/$defs/bool_or_null"
+        },
+        "engine_refusal": {
+          "$ref": "#/$defs/engine_refusal"
+        },
+        "ok": {
+          "$ref": "#/$defs/bool_or_null"
+        },
+        "request_state": {
+          "$ref": "#/$defs/request_state"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "request_allowed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "status_document": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "checked_at",
+        "meta_read_at",
+        "engine",
+        "sources",
+        "agents"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "ads-status/v1"
+        },
+        "checked_at": {
+          "$ref": "#/$defs/iso_time"
+        },
+        "meta_read_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "engine": {
+          "$ref": "#/$defs/engine"
+        },
+        "sources": {
+          "$ref": "#/$defs/sources"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          }
+        },
+        "kind": {
+          "const": "source_unavailable"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "meta",
+            "convex",
+            "map",
+            "ledger"
+          ]
+        }
+      }
+    },
+    "error_document": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "bad_query",
+            "unauthorized",
+            "unknown_agent",
+            "method_not_allowed",
+            "rate_limited",
+            "source_unavailable"
+          ]
+        },
+        "retry_after_s": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "meta",
+            "convex",
+            "map",
+            "ledger",
+            "engine"
+          ]
+        }
+      }
+    },
+    "onboard_row": {
+      "type": "object",
+      "required": [
+        "state",
+        "page_id",
+        "requested_at",
+        "requested_by",
+        "approved_at",
+        "assigned_at",
+        "last_error"
+      ],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "requested_pending",
+            "approved_unassigned",
+            "connected",
+            "expired",
+            "error"
+          ]
+        },
+        "page_id": {
+          "$ref": "#/$defs/page_id_or_null"
+        },
+        "requested_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "requested_by": {
+          "$ref": "#/$defs/requested_by"
+        },
+        "approved_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "assigned_at": {
+          "$ref": "#/$defs/iso_time_or_null"
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{1,60}$"
+        }
+      }
+    },
+    "onboard_state_file": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "written_at",
+        "allow",
+        "rows"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "onboard-state/v1"
+        },
+        "written_at": {
+          "$ref": "#/$defs/iso_time"
+        },
+        "allow": {
+          "type": "object",
+          "required": [
+            "slugs",
+            "pages"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "slugs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(\\*|[a-z0-9]+(-[a-z0-9]+)*)$"
+              }
+            },
+            "pages": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(\\*|[0-9]{5,20})$"
+              }
+            }
+          }
+        },
+        "rows": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/onboard_row"
+          },
+          "propertyNames": {
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          }
+        }
+      }
+    }
+  }
+}

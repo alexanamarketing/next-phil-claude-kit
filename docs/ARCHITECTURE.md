@@ -28,6 +28,7 @@ This location is owned by Claude Code, not by this repo. The installer copies th
 - Git-backed-invisible: the installer git-inits the vault, `auto-stage.sh` (PostToolUse) stages every edit, and `auto-commit.sh` (Stop) commits them, so the user's work saves itself with no git commands.
 - Advisory quality: `claude-md-hygiene.py` and the trimmed `writing-lint` stack, both warn-only.
 - Skills/agent: `/explain`, `/helper`, `/toolupdate`, `unslop`, and the `aeo-copywriter` agent.
+- NEXT doors: `sitedoor` changes an agent's website record through the editor door (guard: `sitedoor-guard.py`), and `adsdoor` reads whether an agent's Facebook ads connection works from the read-only ads status door (`tools/adsdoor.py` with a vendored copy of the door's frozen `schema.json`; guard: `adsdoor-guard.py`, which keeps its Keychain item `next-phil-ads-status` out of the conversation). Each has a managed block in `claude/CLAUDE.md`, kept by `scripts/claude-md-block.py`.
 
 ### The vault (user-chosen path, default ~/vault)
 

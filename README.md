@@ -26,6 +26,8 @@ A few plain-English terms used here:
   by default, and for your first week it re-explains words every time so they stick.
 - Tool memory. As you work with your tools (Gmail, FlexMLS, GoHighLevel, Canva),
   Claude quietly builds up notes about them and reads them back next time.
+- An ads check. Ask "is Dana's ads connection working" and the adsdoor skill says, for
+  each agent, whether their Facebook ads are set up and, if not, what to do and who does it.
 
 ## Install it (one time)
 

@@ -558,6 +558,15 @@ else
   log_warn "Could not add the agent-records block to $CLAUDE_MD_DEST (its markers look hand-edited); fix them and re-run"
 fi
 
+# The ads-check block (adsdoor skill), managed the same way.
+if $DRY_RUN; then
+  log_dry "python3 '$SCRIPT_DIR/scripts/claude-md-block.py' '$CLAUDE_MD_DEST' ensure adsdoor  (ads-check block)"
+elif python3 "$SCRIPT_DIR/scripts/claude-md-block.py" "$CLAUDE_MD_DEST" ensure adsdoor >/dev/null; then
+  log_ok "Ads-check block present in CLAUDE.md"
+else
+  log_warn "Could not add the ads-check block to $CLAUDE_MD_DEST (its markers look hand-edited); fix them and re-run"
+fi
+
 # Warn on reinstall before overwriting kit-managed hooks and skills
 if ls "$CLAUDE_DIR/hooks/"*.py "$CLAUDE_DIR/hooks/"*.sh &>/dev/null 2>&1 || \
    [ -d "$CLAUDE_DIR/skills/project" ] || [ -d "$CLAUDE_DIR/skills/sync" ]; then
